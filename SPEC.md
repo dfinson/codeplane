@@ -2,6 +2,887 @@
 
 ---
 
+## Runtime admission and evidence invariants
+
+### External blocking gates
+
+`POST /api/jobs/{jobId}/external-gates` issues a separate scoped control
+credential only for an existing, live, admission-pinned Runtime execution.
+Observation history and caller-supplied execution identities cannot create an
+owner. Issuance uses ordinary operator authentication. The exact `/api/gate/`
+transport routes always require the issued bearer credential, including on
+loopback, and do not accept event-ingest credentials.
+
+Preflight creates one durable request identity. Status polling or bounded
+long-polling waits on that same decision, with no human-approval timeout while
+its execution remains live. An allowed decision is not executable until an
+atomic, single-use consume matches its source, execution epoch/token and
+complete action digest. Rejection, changed action data, active-wait disconnect,
+cancellation or stale execution retires the request. Replays never return a
+second allow. Callback waits run asynchronously or on the caller's worker,
+never by blocking the server event loop.
+
+`cpl gate --stdin --agent <dialect>` translates the supported legacy hook
+envelopes through the same preflight/wait/consume service. `CPL_GATE_URL`,
+`CPL_GATE_SOURCE` and `CPL_GATE_TOKEN` identify the explicitly issued source,
+not a default session or global pipeline. Only a consumed allow emits the
+agent's neutral allow shape. Missing credentials, malformed data, transport
+failures and unsupported responses fail closed. The relay never launches a
+tool. Caller execution reports are source-attributed observations, not trusted
+execution or usage accrual.
+
+### Caller-owned native input and stop controls
+
+`RuntimeService.start_native` and `invoke_native` accept an optional
+`input_handler`. The original run driver calls `consume_native_input()` at its
+declared run/turn boundary. The receiver passes the Runtime-issued `NativeInput`
+content to the original SDK and calls `acknowledge_native_input(message, native_ids)`
+with that exact object only after observing actual consumption. Missing native
+IDs stay unknown. Operator admission records `input_queued`, not consumption.
+Cancellation or completion drains undelivered input before restoring hooks and
+releasing the exact execution. Native messages never auto-resume a managed session.
+
+This registered boundary is qualified against the eight retained gate families
+and AutoGen, LlamaIndex and Google ADK. An instance without a registered receiver
+cannot accept input, but that does not remove the producer's boundary-input
+capability. Boundary input is not a claim of live steering. Native stop callbacks
+require a separately retained, Runtime-issued control permit after ordinary
+work is revoked. Cancel requested, native acknowledgment and unknown delivery
+remain distinct. Revocation cannot grant permission for another tool call.
+
+### Standalone interoperability transition
+
+`GET /api/integrations/profiles` exposes the 32 selections from approved
+specification `9941bd11323740358f158baf953083d192873f03b610708d9fad10934aee29c5`.
+Explorer IDs do not rename the managed `copilot`/`claude` adapters or the 24
+native mapping IDs. Each operation separately reports declared support,
+implementation, dependency readiness, local fixture qualification and missing
+capabilities. Global admission eligibility is not binding enablement or live
+control readiness. Metadata discovery constructs no SDK clients, and an
+unimplemented selected operation is not advertised as runnable.
+
+Native producer captures retain Aider 0.86.2 `InputOutput` Markdown and the
+actual Continue CLI 1.5.47 session JSON from a two-turn local SSE run under
+`backend/tests/fixtures/native_formats/produced/`. Aider is native-writer/inert
+evidence, not a live vendor conversation. Continue's fetched artifact/file
+hashes are separate from its v1.5.45 test-harness source pin, with no inferred
+gitHead. AmazonQ v1.19.7 adds a real `ChatSession` capture from its native
+in-memory SQLite writer, built with Rust 1.87.0 and run without a network.
+Its test-only extraction overlay, license and build provenance are retained.
+Raw bytes, independent canonical expectations and durable replay are
+checked. The local model fixture supplied no usage, so the CLI's zero-initialized
+counters remain raw history rather than billing evidence.
+
+The additional `otlp_json` observation format accepts supplied span dictionaries
+through historical records. Standard exporters use
+`POST /api/integrations/{bindingId}/traces` with OTLP HTTP/JSON and
+`x-codeplane-ingest-token`. An operator issues/replaces this single-purpose
+credential at `POST /api/integrations/{bindingId}/ingest-credential` with explicit
+`enabled: true`, or revokes it with `DELETE` on that route. Only a digest is
+stored. Its immutable source/Project/Job scope and generation are checked again
+inside the atomic admission transaction. The token grants no event-read,
+permission-consumption, steering, MCP or operator authority. Direct-local
+operator trust is unchanged, but the trace route always requires its scoped
+credential. Copilot-only admission rejects this live intake while explicit
+historical record import remains available.
+
+Exporters supply no CodePlane cursor. The server validates the entire request,
+deduplicates full-content span observations using durable source-scoped receipts,
+and advances the existing source/projection CAS atomically. Exact and overlapping
+retries do not reprocess accepted spans. Changed observations of the same native
+span remain distinct evidence. Concurrent conflicts return retryable HTTP 503,
+not an execution retry. JSON bodies remain bounded to 1 MiB and 1,000 spans.
+HTTP/protobuf uses the optional `opentelemetry-proto==1.45.2` and
+`protobuf==7.35.0` codec, independent of exporter packages. An absent or
+unsupported codec returns explicit unavailability, without loading a client.
+Install `codeplane[otlp-ingest]` to enable that codec; the default core omits it.
+Binary requests use the same credentials, limits and durable span receipts as
+JSON, including deduplication across equivalent wire encodings.
+Metadata-only observations retain missing usage and arguments as unknown.
+
+Trusted native acquisition can supply a typed `AcquisitionCheckpoint` to
+`ObservationRecords.append`. Source identity, expected checkpoint generation,
+transport state and receipt provenance commit with the same accepted batch.
+Ordinary record calls cannot erase acquired-source state, and an acquisition
+cannot silently adopt old untracked progress. A no-change poll does not advance
+its durable cursor or manufacture source termination.
+
+AI Card registration uses the existing project-scoped `integration_identities`
+table and creates no Job or execution binding. The installed AGT core 5.0.0
+schema and signature verifier are supplemented by explicit DID/key, signed
+validity-interval and independently configured service-endpoint checks.
+Upstream signatures do not cover service endpoints. Signed capability names
+remain claims, not action permissions or verified delegation attestations.
+Removal disables retained identity evidence, and subsequent lookup rechecks
+validity rather than trusting a cached verification.
+
+OTLP revisions retain immutable canonical events but share the stable
+binding/source-session/trace/span operation identity. Step and telemetry totals
+count that observed operation once across batches and restarts. The telemetry
+read projection retains explicit success, failure, unknown and conflicting
+evidence. Unknown outcomes produce no success/failure display hint, are excluded
+from known-outcome success rates, and yield a null rate when all outcomes are
+unknown. Source-derived trace/session grouping gives model and raw spans local
+metadata-only activity labels without fabricated messages or utility calls.
+The existing job Tool Breakdown and fleet Tool Health retain unknown counts
+separately from failures. They render neutral `Unknown` when no outcomes are
+known. Mixed success rates use only known outcomes.
+Every accepted-batch replay rechecks its scoped ingest credential, including
+the interleaving where another request committed the batch first.
+
+Optional outbound export uses explicit `export.enabled`, endpoint/protocol and
+destination-scoped encrypted credential references. Disabled startup does not
+construct a background exporter, and legacy endpoint environment variables do
+not install unfiltered global exporters. The existing local provider/readers
+remain separate. Sanitized metadata is bounded before any SDK span/queue entry,
+then batched by the qualified 1.45.2 SDK with 2,048 queued spans, batches of 128,
+a five-second cadence, five-second requests, bounded 1/2/4/8 retry delays and a
+30-second delivery window. Two seconds are allowed for shutdown flush.
+HTTP/protobuf traces and explicit gRPC traces/typed-usage metrics share this
+boundary. Missing role and unverified currency are withheld, not inferred.
+Optional route errors/drop counters are local health, never execution failures.
+
+Flowise prediction/upsert and MCP Streamable HTTP requests use fixed,
+version-qualified native bridge selections. Their installer/mapping source is
+pinned to the actual Runtime admission, and request/result observations drain
+through the existing canonical projection on that same executing Job.
+Flowise remote session IDs and MCP protocol-session/request IDs remain source
+evidence, distinct from CodePlane operation identities. A lost response remains
+uncertain, and local cancellation never invents remote abort. MCP revocation
+uses the native cancellation notification and retains acknowledgment or a late
+result separately. The standard stdio client is separately qualified against a
+real local MCP process. Its command/environment snapshot is bound to the
+admitted operation, not exposed as a public process-launch route.
+The client API owns one transport session per tool operation. It does not claim
+process-local state retention across calls, even when they share a binding.
+
+Caller-owned FastMCP servers can attach the released `TrustGatedMCPServer` to
+their actual registered handlers. The client must sign a short-lived,
+single-use proof of the exact binding, epoch, endpoint, native request ID, tool
+and argument digest with its pinned key. Self-asserted DID/capability metadata
+is not authority. Verified identity precedes common policy, then upstream
+trust/capability checks and an exact normalized-argument entry fence precede the
+original handler. SDK cancellation drains receipt transactions outside the
+SDK's cancellation scope. Sync handlers remain retained until actual completion,
+including late successful completion after a cancellation request. No agent
+steering or ownership of the caller's host lifecycle is inferred.
+
+The Haystack bridge qualifies `haystack-ai==3.0.0` with the core 5.0.0
+`TrustedPipeline`/blocking `TrustGateComponent`. The actual caller-owned
+`Pipeline` schedules synchronous or asynchronous components. Each real handler
+passes trust verification and the existing Runtime policy before entry, with
+component identity retained in canonical history. Missing handlers and changed
+graph/trust configuration fail closed. Detach restores the host's exact methods.
+Cancellation remains requested while an entered handler is still running.
+The component bridge neither invents model usage nor supplies live steering.
+OpenAI 2.38.0 ChatGenerator responses retain the actual completion identity and
+typed usage once per response, not once per choice. Component-supplied usage
+without that source correlation remains in local history, not inferred accrual.
+
+Langflow uses the actual `lfx==0.4.6` host engine with core 5.0.0
+`TrustGatedFlow`, `IdentityComponent` and blocking `TrustVerificationComponent`.
+This release satisfies the unchanged core cryptography 46 contract. LFX 1.13.3
+requires cryptography 50, which conflicts with both CodePlane's `<47` and
+governance core 5.0.0's `<50` constraints; it is not a qualified installation.
+Readiness still requires the exact qualified release, and Langflow is optional.
+Connection trust and Runtime policy precede the original sync/async output
+method. Thin synchronous wrappers using that release's `run_until_complete`
+retain one operation receipt, and changed output selectors fail closed. The
+newer LFX `delegates_to` dispatcher is not present or claimed for this release.
+Real graph edges, node IDs, flow/run IDs and component DIDs remain source
+evidence. Runtime retains entered work until completion and exact detach leaves
+the host graph intact. Trust configuration export alone is not execution.
+
+Swarm qualifies original `openai/swarm` commit
+`6af0b4caf37dca4526dfd98e9fbd8ce36e7eeb22` (distribution 0.1.0), OpenAI 2.38.0
+and core 5.0.0. Original streamed/nonstreamed dispatch remains intact. Actual
+function entry is gated, and returned peers must be exact bound objects verified
+by `HandoffVerifier` before context transfer. Native call/response IDs and
+source-present typed usage, including zero, remain local. Missing streamed usage
+stays unknown. Cancellation retains synchronous work, and live input is not
+inferred from a handoff or a subsequent run.
+
+The fixed A2A bridge uses the 0.3 JSON-RPC transport contract rather than
+upstream local `create_task` objects. Signed peer identity and the independent
+endpoint pin are checked before delegation. Actual task/context IDs, status,
+artifacts and JSON-RPC response identities are retained on the same Runtime Job.
+Input requires a source-confirmed `input-required` task/context. Explicit
+`tasks/cancel` records the returned state or refusal, while Runtime revocation
+only stops local waiting. Response loss is not retried. Known-task uncertainty
+must be reconciled with `tasks/get` before another send, and an unbound uncertain
+submission cannot be automatically reconciled into permission to resubmit.
+
+`POST /api/integrations/observations` registers a binding-owned history Job
+without launching an SDK, creating a workspace or attaching runtime sidecars.
+Repeated registration of the same binding/source returns the same Job. These
+Jobs expose `observationOnly` and `integrationBindingId`, may have null `repo`
+and `baseRef`, and cannot enter managed execution, workspace or instruction
+paths. Artifact collection is `not_applicable`, not a fabricated success.
+
+`POST /api/integrations/{bindingId}/records` accepts bounded, operator-authenticated
+record batches with `sourceKey`, `startIndex` and the previously accepted
+`prefixSha256`. Request bodies are limited to 1 MiB before JSON parsing, batches
+to 1,000 records, and normalized output plus buffered state to 8 MiB.
+New binding IDs are URL-safe path segments (ASCII letters, digits, `.`, `_`, `~`
+and `-`, excluding `.`/`..`); external session IDs and source keys remain opaque.
+`GET /api/integrations/{bindingId}/events` reads canonical history with a separate
+storage cursor. These are operator import endpoints, not binding-scoped external
+ingest credentials or execution admission.
+
+Migration 0080 owns one versioned projection checkpoint per binding. Decoder
+context, pairing, transcript steps and activities are shared across acquisition
+channels for the registered source session. Projection CAS, per-source cursor,
+canonical events and durable batch acknowledgment commit together. Retrying any
+accepted batch returns its acknowledgment without publishing it again. Ambiguous
+older per-source projection state requires explicit reconciliation, never an
+automatic merge or reset. Downgrade refuses to discard retained projection state.
+
+Observation grouping prefers explicit producer turns, then source-scoped native
+request/run-operation identity. Otherwise assistant and metadata records remain
+in one derived source-session segment. Genuine operator input can establish a
+boundary. Source termination or `endSession: true` closes the segment without
+claiming a managed execution outcome. An empty batch is valid only to declare
+An error severity alone, including a mapped span emitted as `session.error`,
+is not termination evidence and does not close the registered source. An empty batch is valid only to declare
+that end explicitly. Acquisition occurrences keep distinct event identities
+even when their text and record indexes match.
+Authoritative operator messages are deduplicated by canonical event identity,
+never equal text across sessions or attempts. The composer settles only its own
+local placeholder when submission finishes; a receipt does not invent an
+observed transcript event or remove a real echo.
+
+`tool.call.failed` remains a distinct wire kind, pairs by source-qualified call
+identity, and renders a failed tool outcome without terminating its Job or
+agent step. Observed failure is not proof of execution for governance accrual.
+Source control-looking records remain history and cannot dispatch control-plane
+actions on live delivery or SSE replay. Observation events do not trigger legacy
+sidecars or plan/title inference. Native usage remains retained rather than
+being passed to legacy USD rollups without typed accounting qualification.
+
+The standalone replacement is reviewed against product base
+`871fc81af41fec13de756338aab2715839357af5` (tree
+`ed0ec75798921cd0d907a3131c92f631244b2001`). The final package removes the
+TraceForge/title extra, vendor runtime imports and TF-owned lock edges.
+The tested rollback-capable transition release is preserved at
+`287483a7cd931589ce67140e915116896fa4f39a`, with its exact lock, wheel,
+source and populated transition/backup/checkpoint evidence. Legacy execution
+and old/new parser conversion remain in that release, not in the final package.
+Final package acceptance remains source-bound and separate from removal itself.
+Existing history is never discarded to complete migration.
+Migration 0079 retains producer-supplied canonical `raw_event` through SQLite
+and replay. Historical NULL remains unknown, never reconstructed, and downgrade
+refuses to erase retained raw data. Event timestamps are stored as UTC instants.
+Raw data remains excluded from metadata-only export.
+Migration 0081 separates transcript-step timing provenance from canonical
+transport ordering. Source projections use supplied source bounds across batches
+and retain the last source clock for empty import-end requests. Unknown bounds
+and duration remain NULL in step rows/read models. Existing timestamp bytes are
+retained with `legacy_unrecorded` provenance, and live timing remains explicit
+`live` timing. Downgrade refuses to erase recorded provenance or nullable bounds.
+
+`services/adapters/contracts.py` separates observation, execution, blocking
+permission interception and text-only completion. An observer does not acquire
+launch or cancellation authority. Recipe capability requests must be a subset
+of both Job policy and actual adapter support. An unsatisfied request fails
+before side effects rather than silently reducing or broadening its grant.
+The invocation boundary must enforce the resulting grant, not rely on prompts.
+Local-workspace checks reject unsupported host path forms and lexically outside
+targets before resolving them. POSIX backslashes are not rewritten as separators.
+Symlink and Windows junction destinations are checked before traversal, while
+ordinary in-workspace links retain their physical path semantics. These prechecks
+do not grant external access or let a policy approval override capability limits.
+Recipe run/revision/step-instance/attempt correlation is additive and never
+replaces transcript `step_id` or `turn_id`.
+
+`services/action_policy/syntax.py` provides bounded Tree-sitter evidence using
+the declared Bash/POSIX-shell or PowerShell dialect. It retains source bytes,
+grammar node spans, conditional/deferred scopes and nested interpreter origins.
+Unknown dialects, unresolved expansions, malformed syntax and resource limits
+are incomplete evidence, not a safe-command verdict. Syntax structure alone
+does not establish command semantics.
+
+Managed events use application-owned canonical models. Executions still pinned
+to unavailable implementations require explicit reconciliation using the preserved
+release; the final runtime cannot silently repin them. SessionConfig's optional
+`execution_capabilities` is enforced at provider pre-tool hooks and permission
+callbacks. `None` retains the existing unrestricted-by-recipe behavior. Shell
+capability alone does not authorize mutation or external access, and an
+unproven arbitrary executable is not treated as a read.
+
+Recipe attempts register their actual adapter/session with RuntimeService and
+retain the returned exact execution token. Attempt controls never fall back to
+the primary Job session. Their events carry explicit execution epoch and attempt
+metadata. EventProcessor requires a separately registered attempt workspace and
+partitions turn, pairing, activity, StepTracker and diff state. Closing an
+attempt cannot close or auto-commit another attempt. Read-only observation
+does not mutate the Git index while calculating a diff.
+
+`open_attempt_execution` owns deferred SDK creation, exact-handle registration
+and cleanup. With `SessionConfig.defer_start=True`, creation sends no initial
+prompt. The caller dispatches the pinned prompt only after registration and
+durable recipe admission. Registration failure or caller cancellation closes the
+owned session. Job cancellation signals the primary task and fences every
+attempt before awaiting any slow transport teardown.
+
+`attach_attempt_policy(job_id, attempt_id, expected_execution)` attaches the
+existing Job router and current policy to that exact provider session. It does
+not register another budget or replace the primary session's workspace. The
+adapter validates the attempt/epoch and uses its trusted SessionConfig workspace.
+Cross-provider runners attach this policy before admitting their first prompt.
+Pending permissions retain the session's ownership generation. Pause/cancellation,
+session replacement or a newly attached execution token invalidates that generation.
+Both router and hard-gate approvals recheck it before returning permission, even
+when transport abort is still draining or the same native session ID is reused.
+SDK permission callbacks and pre-tool hooks capture that generation before
+awaiting capability parsing, so an old callback cannot adopt a replacement's
+ownership when it reaches policy evaluation.
+Strict dispatch publishes a durable admission receipt with the exact target
+session/token and accepted/unconfirmed markers, not an observed operator input.
+Receipts remain visible without feeding title, step or sidecar input processing.
+Uncorrelated SDK observations are retained separately.
+Attempt open/registration, contract/policy attachment and dispatch share the
+same approval-scope guard. A positively bound sibling gate does not block an
+independent attempt. Unscoped, stale or conflicting provenance remains Job-wide.
+Recipe human ownership comes from its durable gate binding; SDK ownership requires
+the persisted permission event and matching recorded execution. Tool arguments
+cannot declare their own authority scope.
+
+Internal `execution.contract.pinned` records bind an immutable implementation
+selection to a durable application admission ID and the carried Job budget ID.
+Recovery reads that original pin without minting one for unrecorded history.
+Fresh continuation uses a new admission, not a fresh budget. Actual SDK handles,
+live epochs and tokens are recorded separately and may change on recovery.
+The trusted root catalog distinguishes implementations still available for old
+pins from the selected contract for new admission. Conflicts or unavailable
+pinned implementations require reconciliation rather than silent migration.
+
+Non-recipe creation records an internal legacy admission declaration in the same
+transaction as the Job. The explicit `recipe_admission` creation flag suppresses
+that declaration for recipe-owned admission, including before its run row exists.
+Declarations are not successful-start announcements. Immutable abandonment records
+restore the previous selection without deleting either admission or contract pin.
+Legacy continuation/reset consumers must keep declaration or abandonment atomic
+with their corresponding Job reset or restoration.
+With a contract catalog configured, legacy pin preparation runs at reserved
+startup before policy or preflight. Restart recovery only reads the retained pin.
+Fallback handoff generation waits until pin and policy setup, then carries that
+contract into utility completion while retaining the old summary-session number.
+Native in-process fallback retains the admission. A previous execution that is
+still releasing the Job prevents a new legacy continuation from being declared.
+
+Governed utility calls persist metadata-only request/completion records under
+their exact admission contract. They retain requested/observed models and native
+usage units, not prompt or response text. An unfinished request is not proof of
+execution or completion. Completion-receipt failures remain explicit and retain
+known usage plus its stable operation identity for accounting without retrying
+the model call.
+
+Attempt model reports are session-qualified `model.observed` events carrying
+requested/actual identities and match status, with recipe, attempt and epoch
+metadata. A mismatch keeps that scope on `model.downgraded`. Attempt reports
+never replace the primary Job model/default or another attempt's verification.
+Actual provider reports are retained for attributed attempts even when the SDK
+selected the default model or the session has a preflight role. With no requested
+model, requested identity and match status remain unknown, not synthetic matches.
+Managed `metadata.run_id` is the real SDK session ID. Policy attachment adds
+the exact registered `execution_token` for subsequent events, distinguishing
+reused native IDs within an attempt/epoch. Earlier events keep an unknown token.
+
+For attributed attempts, permission routing and savepoints use the trusted
+session workspace, never the primary Job workspace. Adapter description and
+dependency readiness are separate from execution admission. The managed
+Copilot/Claude descriptors can be read while disabled without constructing SDK
+clients. Presets remain per-action approval policy, not categorical bans on
+write, shell or delegation capabilities.
+
+Text-only completion rejects tool attempts and reports provider errors, empty
+responses and output-limit failures explicitly. Returned typed usage distinguishes
+Copilot native cost units from verified USD and retains present zero values.
+Legacy numeric completion fields remain available during migration. The strict
+`cp-action-v1` evidence schema and deterministic credential filters are local
+primitives, not themselves permission authority or a claim of PII detection.
+
+The standalone assessment service binds its exact source fields to the local
+action digest, allows one provider attempt, and limits concurrency to two
+globally and one per Job. At most 32 requests wait for admission for up to two
+seconds. The 20-second decision deadline includes queueing and liveness checks.
+Canceled provider cleanup retains its concurrency slot until it actually ends,
+without delaying the caller's unavailable result. Redacted semantics, stale
+bindings and invalid evidence cannot become automatic permission. A completed
+utility call retains its known model and usage even when its assessment is
+rejected for stale state or invalid output. Copilot assessment calls request the
+existing evidence schema through native per-run structured output on a fresh
+session, not immediate steering. Before schema-bound inference, the same SDK
+client must load its actual model catalog and find exactly one entry for the
+explicit requested ID, without a disabled or unconfigured policy. Startup and
+catalog lookup remain inside the decision deadline; unavailable metadata raises
+`model_catalog_unavailable` before session creation, without changing the model
+or retrying inference. This readiness check does not assert provider-side schema
+enforcement, and ordinary nonstructured completions retain their existing path.
+The provider request uses `cp-copilot-wire-schema-v2`, a separate projection that
+retains declared literal types for OpenAI compatibility and follows the
+Anthropic SDK's supported bound keywords. Unsupported numeric, string and
+collection bounds become descriptive wire
+guidance, not removed application rules. Enums, required fields, references and
+explicitly closed object shapes remain in the wire schema. Implicit open
+objects, typeless literals and unsupported structural rules
+fail explicitly instead of disappearing. The original schema is never mutated;
+the full caller schema and strict local validation remain authoritative.
+Existing utility request/completion receipts retain the projection version and
+canonical full/wire schema hashes, including the request preceding a provider
+error. This compatibility projection neither repairs responses nor changes the
+decision deadline, one-attempt limit, source-span checks or acceptance criteria.
+Its classifier instructions replace the coding assistant's default presentation
+prompt; tool access remains disabled and permission callbacks still reject requests.
+For explicitly schema-requested Copilot utility replies, the adapter may remove
+one exact whole-output `json` code fence around a single JSON object. It retains
+the original text and normalization provenance and applies the raw-byte bound
+before transforming the representation. Bare JSON and generic text callers are
+unchanged. Prose outside the fence, multiple objects or fences, malformed JSON,
+duplicate keys and nonobject output are rejected. Local schema, identity and
+evidence validation remains unchanged; no keys, values, unknowns or spans are
+repaired, and provider-side formatting never grants permission.
+Producer prompt `cp-assessment-prompt-v2` makes the unchanged wire contract
+explicit: input source labels are distinct from assessed field labels, enum
+spellings come from the schema types, and unknown dimensions or empty fact lists
+must have no evidence items. Nonempty decoded-codepoint bounds are necessary,
+not proof that a citation supports its claim. Instructions cover the whole local
+and remote operation and distinguish sensitive output from filesystem mutation,
+normal credential use and content-free reads. This is producer guidance, not
+output repair or independent semantic proof. The actual native file-write and
+recovery constraints remain bound local facts. Arbitrary shell effects and
+target sensitivity/output extent have no universal attested producer here;
+unknowns cannot be filled from command names, protected-write configuration or
+fixture-specific answers.
+Managed SDK policy approvals travel through the owning adapter's event stream
+so Runtime records its waiting state before publishing the request. That live
+waiting state remains eligible for the exact approval's final ownership check.
+Canceled policy invocations retire their own unconsumed requests rather than
+leaving stale approvals behind. Runtime shutdown preserves pending decisions
+for the existing fenced restart/reconciliation path.
+Native read/search path arguments are retained for both capability and policy
+containment checks. Scout's existing read-only workspace restriction applies
+before standalone policy in both SDK pre-tool and permission callbacks.
+
+The AGT policy component uses the pinned core package's `PolicyEngine` with
+explicit `priority_first_match` priorities and no evaluation-time rate limits.
+Automatic Git-recoverable mutation additionally requires positive application
+recovery evidence, not the model's Git claim. For supported direct native file
+writes, read-only Git inspection binds the complete declared target, current
+unfiltered bytes and retained HEAD commit. SDK path hints alone cannot establish
+that target set, which must match the immutable native arguments. A known new target instead binds
+absence in both the worktree and commit. Existing bytes absent from that commit,
+ignored new targets, symlinks, hard links, ambiguous host paths, partial repositories and opaque target sets do
+not acquire a recovery witness. Inspection uses the existing 20-second decision
+and 32-KiB input bounds, without filters, snapshots, index or object/ref writes.
+Path and handle versions are checked against their own API's observations,
+preserving change-time checks where Windows exposes different `ctime` semantics.
+A final reopened handle verifies identity and version after the asynchronous Git work.
+The witness is included in the action binding and audit metadata and rechecked
+before permission consumption, including after a human wait. Changed bytes,
+absence or retained commit cannot consume the old permission. Read-only actions
+need no recovery witness. Local loss/protection constraints and model unknowns
+or contradictions remain authoritative and cannot be repaired by positive
+recovery evidence. The final owner and selected-policy fences run after witness
+I/O, with the local policy identity rechecked after the last asynchronous check.
+Its standalone ledger uses separate storage with atomic source-qualified executed-call identity
+and counters, marks missing call IDs unaccountable, and sums only verified USD.
+The metadata-only export projection excludes raw prompts, arguments, results,
+paths and rationale and keys external identities before any exporter queue.
+Source removal alone does not establish final-wheel, profile-matrix or live
+workflow acceptance. See `docs/transition-retirement.md` for the retained
+release, cutover and recovery boundaries.
+
+`cpl governance-transition import-legacy` is explicit stopped-runtime maintenance
+for an existing legacy governance database under the active CodePlane home. It
+retains a read-only original backup, source digests and exact counter/processed-key
+comparisons before a replacement writer can activate. Scoped grants keep their
+original TF policy, timestamps and expiry. They do not become AGT waivers.
+Conflicting, reserved or unmapped state requires reconciliation. Legacy spend
+reader values remain estimated or unknown, never verified currency, and imported
+aggregates do not fabricate completed-call receipts. Runtime ownership excludes
+concurrent maintenance. This import command does not switch providers or complete
+forward-preserving provider rollback, and never restores an old application
+database over newer history, approvals or outcomes.
+Unavailable historical currency makes the USD guard abstain with explicit audit
+status. It does not make otherwise complete execution identities incomplete.
+Once import evidence exists, missing or emptied original tables require
+reconciliation rather than being treated as a pristine ledger.
+
+`cpl governance-transition quiesce` blocks new admissions without discarding
+in-flight outcomes or audit delivery. Its generation is required by
+`cpl governance-transition select-provider standalone --generation N` in the
+final package. The preserved transition release additionally supports `retained`.
+Selection requires a drained, stopped runtime and exclusive home ownership.
+Only previously unseen Jobs take the new default. Existing Job implementation
+pins, provider ownership and policy-scoped grants remain unchanged across
+continuations and restarts. An unavailable pinned implementation requires
+reconciliation, not fallback to another provider.
+
+In the preserved transition release, the retained provider uses the same working
+`governance.db`. Its registered
+canonical outcomes and exact authorizations are journaled before accounting.
+The pinned TF implementation previews each state transition before its actual
+write. Finalization checks all dimensional counters, state fields, processed
+keys and unchanged grants against that transition, while retaining immutable
+original import evidence. Unknown writers, conflicting receipts and missing
+source tables block activation. In that release,
+`cpl governance-transition reconcile-retained` is stopped-runtime maintenance
+that resumes only validated prepared accounting,
+including an exact reserved event-time snapshot. It never repeats the business
+action or restores an older database over newer history. New provider selection
+refuses any unresolved receipt. Retained evaluation preserves its own policy
+namespace and configured thresholds, using only verified ledger USD for currency
+guards. Unavailable verified currency explicitly abstains rather than becoming
+zero. Native and historical estimated values remain preserved, not reclassified.
+Verified legacy import provenance retains the original Job's TF policy even
+before its first new-format pin. Native runnable compatibility is checked before
+persisting provider ownership, an admission pin or a start witness, and still
+requires the qualified CP policy. The final package never discovers or loads a
+retained TF distribution, even if one is independently installed. Selected or
+preserved missing implementations never silently fall back.
+
+The final policy settings surface keeps preset, approval batching, configured
+verified-USD warning/escalation overrides, and MCP configuration. Zero and null
+overrides remain meaningful. Spend guards are soft and elevate-only, independent
+of mandatory security gates and incomplete-evidence routes. Eligible routine
+escalations use the application-owned monitor, then human approval batching.
+Full human approval can issue a 24-hour Job-, policy- and reason-scoped grant;
+partial approval releases only selected actions and never creates that grant.
+Historical TF grants are not silently reinterpreted as standalone grants. Historical
+re-enrichment uses the bounded application-owned tool-pairing implementation to
+fill structural duration/display metadata only. It preserves raw records, risk,
+titles, identities and legacy markers and does not invoke a model.
+
+Released 0.1.5 format mappings, preprocessors and Markdown readers are retained
+under `backend/compat/traceformats` with original source hashes and the upstream
+license. New native event and fallback turn identities are scoped by stable
+binding/Job ownership (`codeplane-native-v2`), so reused vendor session labels
+do not collide. Explicit legacy identity mode reproduces retained v1 seeds
+without rewriting history. The decoder rolls back its motivation/turn buffer
+if a record fails. Configured
+mapping directories override migrated user definitions, legacy user definitions
+and bundled assets in that order. Inbound OTLP JSON is independent of exporter
+packages and bounds raw input to 1 MiB/1000 spans, nesting to 32 levels and
+10,000 nodes, and normalized expansion to 8 MiB. Fresh Copilot/Claude JSONL
+watchers use the standalone decoder with the retained `codeplane-native-v1`
+identity seed and explicit version-2 acquisition checkpoints. Physical records,
+decoded outputs, emitted events and storage cursors remain separate counts.
+Version-1 checkpoints explicitly require the preserved transition reader.
+The final runtime validates retained conversion receipts and resumes reconciled
+version-2 checkpoints without loading the old parser or resetting an offset.
+Complete format, acquisition and checkpoint-conversion qualification remain
+separate gates.
+
+### Recipe definitions and publication
+
+Recipes describe configurable intra-Job work. They are distinct from the legacy
+TaskLink chains and from StepTracker's transcript turns. `POST /api/recipes`
+creates a draft only. Saving, validating, copying and publishing definitions
+never creates a Job or dispatches a runner. Draft writes and publication use an
+expected version, so a stale editor cannot overwrite another revision.
+
+`POST /api/recipes/validate` returns actionable field paths and error codes.
+The `/recipes` editor uses the same APIs for typed runner, capability, workspace,
+binding, dependency and outcome-route fields. It can insert pinned published
+blocks and copy published revisions into independent drafts. Invalid local JSON
+and invalid graphs cannot be published; neither authoring nor publication runs a Job.
+Publication rejects missing or mistyped bindings, unknown outcomes, unreachable
+nodes, dependency/route cycles, recursive block composition, unsafe parallel
+writers and invalid retry bounds. Outcome routes support fanout and explicit
+dependency joins. Human gates name the proposed action and explicit decisions.
+Retries count total attempts, cannot skip a human gate, and cannot automatically
+retry an uncertain external effect.
+
+Published revisions retain stable step IDs, runner settings, instructions,
+typed inputs/outputs, workspace policies and capability requirements. Reusable
+blocks reference published revision IDs. Publication retains the transitive
+block snapshots and a canonical SHA-256 checksum. Later draft edits or block
+publications do not rewrite those snapshots. Copying creates a new independent
+draft, with no execution, approval or completion identity.
+
+Recipe definition/revision lists are bounded to 100 records per page and use a
+storage sequence cursor plus `highWater`. The bound freezes which persisted
+revisions are included, not a fabricated historical view of mutable drafts.
+Migration 0076 adds Job-owned run, step-instance, immutable attempt/result,
+output-receipt, workspace-lease and review storage. Recipe gates reference
+existing approval records. Existing Jobs and transcript steps are not backfilled
+with invented recipe identities.
+
+Attempt admission persists the exact typed inputs and dispatch identity before
+runner start. Retries retain their earlier inputs, results and output checksums
+and cannot exceed the published total-attempt bound. Writer and shell attempts
+hold a canonical workspace lease. Uncertain effects retain that lease and
+remain interrupted rather than entering a blind retry.
+
+`POST /api/jobs` accepts an optional published `recipe` selection. The Job and
+its pinned run commit together before background setup starts. Missing or
+mistyped launch parameters create neither record. Recipe Jobs use the existing
+Job queue and shared runner capacity, not a second scheduler. Their graph owns
+Context, planning, verification and review steps, so legacy Scout/planning/
+verification paths do not execute a second time. Command and human steps do not
+create SDK sessions.
+
+Before governed recipe invocation, trusted composition must configure the
+actual available execution contracts. Fresh admission pins the selected
+contract to the run; recovery only reads its existing pin and never backdates
+one onto unrecorded history. The budget identity remains the Job across new
+run IDs. A real agent handle is persisted, bound to its contract and attached
+to the same Job policy before its initial prompt is submitted. Admission
+receipts report accepted/unconfirmed delivery, not observed execution.
+
+Successful dependency joins require their declared outcomes. An explicitly
+degraded input can retain a known failed diagnostic receipt, its producing
+attempt, original outcome and reason without treating it as successful output.
+Human decisions bind the existing ApprovalService record to the exact input
+checksum, action and next steps. Nonzero command status cannot become success
+through a runner claim, and missing command capture remains interrupted.
+Declared code reconciliation must retain each consumed writer commit in the
+result's Git ancestry. Merely declaring `reconciles` on an exit-zero command
+does not merge code or satisfy that contract.
+
+Nested block instances are scoped to the exact wrapper attempt, such as
+`checks@2/lint`. A block retry creates independent child instances rather than
+inheriting completed children. Parameter handoffs retain the caller's exact
+source receipt, including explicitly degraded diagnostic provenance, while
+typed defaults have no fictional producing attempt.
+
+An unfinished agent can resume within its existing attempt only after an
+app-owned confirmed-safe stop receipt. Recovery checks the current execution
+token, instance version, owning Job, cancellation state and workspace lease.
+Delayed stop callbacks cannot interrupt a subsequently resumed execution.
+An unconfirmed stop remains interrupted and retains its writer lease.
+Transport teardown alone does not establish completed-effect certainty.
+Writer, shell, delegation and external-access interruption stays uncertain
+without a provider-owned effect receipt or explicit reconciliation. Read-only
+recovery and positively recorded no-dispatch recovery do not mint new attempts.
+
+Input snapshots use private Git refs and an alternate index, preserving HEAD,
+the user's index and working files. Command capture can retain immutable,
+checksummed artifact revisions instead of putting entire output streams into
+the run record. A process that never started records that fact without inventing
+an exit status or a passing check.
+On Windows, a trusted isolated bootstrap enrolls itself in a per-command Job
+Object before starting the exact user argv. Cleanup terminates that owned tree
+and checks its active-process count even after the leader exits. It does not
+reuse the tunnel service's global Job Object or infer tree termination from
+an exited PID. Unknown startup or containment remains interrupted, retains
+writer ownership and displays an unknown start status rather than a passing
+check or positive no-dispatch receipt.
+
+The compatibility graph builder keeps configured verification and self-review
+as agent steps, not command checks. Plan First retains an initial plan and at
+most five replans, each with a fresh approval of its exact plan and code inputs.
+Agent turn limits are ceilings, not a prescribed number of repeated prompts.
+A fulfilled output contract or explicit validated failure ends the attempt
+after retaining the completed-turn receipt. Only incomplete output contracts
+use remaining turns. Steps with no model-produced outputs, including code-ref-only
+steps, do not require an invented empty JSON response instead of a natural-language
+summary. Explicit structured failure still ends those steps unsuccessfully.
+Recovery qualifies the last registered execution against its app-owned
+completed-turn receipt before dispatch. A conclusive retained contract can be
+finalized without opening another SDK session. New receipts retain the exact
+completion text; older receipts may use only a matching execution token,
+native session and epoch before that receipt's event boundary. A later
+uncompleted message is never substituted for completed output.
+Claude recipe executions additionally require a successful native terminal result,
+including on recovery. Initialization/status messages and stream exhaustion do not
+qualify as output or completion. A genuine result with no text may still fulfill
+a contract with no model-produced outputs, including code-ref-only steps.
+`POST /api/recipes/resolve-default` validates and retains a content-addressed
+published revision of that actual configuration, without launching a Job.
+Repeated resolution reuses the same revision. A configuration change creates
+another pin and does not rewrite earlier definitions or runs. New Job selects
+that default or an explicit published custom revision, validates typed launch
+inputs and previews resolved steps, capabilities and routes before creation.
+Custom graphs retain their own planning and gates rather than inheriting a
+second legacy Plan First loop.
+
+Migration 0078 retains multiple historical runs on the same Job and permits only
+one unresolved run, including canceled runs with uncertain execution effects.
+Explicit terminal continuation pins a new run with the instruction and current
+code reference, retaining the selected revision unless a replacement was
+explicitly selected. Old attempts, results and approvals are not copied. Run
+numbers provide a deterministic current-run selector and bounded history cursor;
+exact historical run and step identities remain addressable.
+
+Job-owned inspection lives under `/api/jobs/{jobId}/recipe`: `current`, bounded
+`runs` history, and exact `runs/{runId}/steps/{stepId}/attempts/{attemptId}` reads.
+Each nested identity is checked against its owner, including historical runs.
+Reads never recover, resume or dispatch work. Step pages contain at most 100
+instances and attempt summaries at most 20 entries; full evidence is fetched
+only for the selected attempt. Active step pages are live cursor projections,
+not a claim of a frozen historical snapshot. Resolved run history retains its
+recorded definitions, outcomes and gate receipts after a successor is admitted.
+Keyboard selection preserves focus while attempt evidence refreshes. The
+inspector's read-refresh control remains focusable while busy but cannot issue
+another read. Job tab swipes remain usable without spatial animation when
+reduced motion is requested.
+
+Selected-attempt `/control` reads describe the actual owned message channel and
+its disabled reason, not a model's presumed capabilities. `/messages` requires
+the expected execution token and checks current Job/run/step/attempt ownership
+again before dispatch. It never uses the Job's primary session as a fallback.
+Conflict, failed and uncertain delivery remain distinct; accepted means a
+durable admission receipt, not observed execution. Read refreshes do not resend,
+resume or clear gates. Receipts capture the original canonical recipe scope,
+native session and execution fence before provider awaits.
+
+The Run tab retains bounded pending Job decisions and the existing permission
+Approve/Reject controls. Positively bound human recipe gates link to their exact
+input/output decision inspector instead. Unknown scope is shown as a Job-wide
+blocker, never silently excluded or treated as an agent message.
+
+Selected stop targets the exact owned runner task, not the Job or sibling
+attempts. A safe read-only/no-dispatch stop requires explicit attempt Resume.
+Uncertain command or writer effects retain ownership until an operator records
+stopped-effect reconciliation with the exact current code and rationale.
+Reconciliation does not mutate prior results, manufacture success, or grant a
+retry. Whole-Job cancellation remains a separate action.
+
+The shared inspector lists pinned predecessor outcomes and declared consumers
+within the exact block invocation. Deep links carry run, step and optional
+attempt identities. Declared consumer bindings are not represented as proof
+that a selected historical attempt's output was consumed.
+The selected attempt also exposes paged actual consuming input receipts,
+including the consuming attempt, original receipt/checksum and both recorded
+outcomes. These references prove input admission, not consumer completion.
+
+`POST /api/jobs/{jobId}/reviews/prepare` seals the explicitly selected attempt
+and event evidence plus an exact current-code snapshot without executing work.
+Selection is bounded to 20 attempts and 100 canonical events. Structured
+snapshot metadata is limited to 1 MiB and copied artifact evidence to 256 MiB.
+Copies are checksummed before short metadata writes; original mutable artifact
+IDs alone are not review evidence. Captures follow ordinary artifact retention,
+while the recorded event keeps the selected structured evidence and checksums.
+A canonical app-owned preparation receipt binds the snapshot artifact to its
+original checksum, so replacing bytes and supplying a replacement checksum
+cannot manufacture a new trusted capture.
+
+`POST /api/jobs/{jobId}/reviews` records rationale with a stable request key,
+snapshot identity and checksum after revalidating Job/run versions, code and
+selected evidence. It is an append-only `review.recorded` event, not an
+accept/reject state machine, agent message, approval, merge or tracker command.
+An HTTP 409 rejection invalidates the selected capture and unlocks explicit
+recapture with a new request key while preserving the operator's rationale.
+Uncertain delivery retains the exact request and key for an idempotent retry.
+Legacy Jobs have no fabricated recipe correlation. Review history uses bounded
+storage cursors and a frozen high-water mark, not a reconstruction of unsaved
+Story annotations. Changes and Story remain central, with the selected
+generation, command, result and delivery evidence alongside them.
+
+`POST /api/jobs/{jobId}/resume` accepts `expectedRunId` and `startRequestKey`
+for an exact continuation receipt, with an optional explicit replacement
+`recipe` selection. Replaying the same request cannot start a third run or
+change its inputs. A conflicting request key is rejected. A completed older
+run without a policy pin may still receive a fresh, explicitly selected
+continuation pin; its old history remains unrecorded. Compatible agent
+continuations reuse the actual native conversation, otherwise they receive
+retained historical context without treating old outcomes as current approvals.
+
+### Existing runtime guarantees
+
+The normal lifespan now selects the local standalone catalogue and AGT policy
+authority before recovery, using the existing canonical event store for admission
+pins, the durable ApprovalService for decisions, and the separate governance
+ledger/audit outbox. SDK permission and pre-tool boundaries carry immutable
+session/attempt ownership and actual arguments into that authority. Optional
+voice model loading is deferred to an explicit voice request.
+
+This cutover is not full qualification: native-source compatibility paths,
+historical budget/trust reconciliation, optional export and complete
+interoperability/acceptance gates remain open. Deterministic activity labels
+remain authoritative fallbacks. Closed activities may receive one durably claimed
+text-only refinement, with one worker, queue 64, at most 12 bounded snippets,
+4 KiB input, 512-byte output and an 8-second deadline. Failed or interrupted
+claims are never retried during recovery.
+
+Direct command argv is checked for mandatory Git hard gates before assessment.
+Known executable wrappers and literal nested shell scripts retain that gate.
+The authority also inspects executable AST nodes, including Git global options
+and quoted executable paths, independently of model-provided mechanism labels.
+Quoted prose in ordinary arguments is not treated as an executable command.
+Committed command results join the canonical replay cursor and accrue exactly
+once, including executed failures. A known non-start does not accrue; an unknown
+start/effect remains explicitly unaccountable. Windows audit keys use user-bound
+DPAPI encryption and a protected current-user/SYSTEM directory DACL. Native
+Windows qualification is a separate required gate, not inferred from Linux tests.
+
+`start_or_enqueue` admits or queues work without invoking sidecars. Startup is
+reserved before the first database await, then `_start_reserved_job` configures
+policy before built-in/custom sidecars or Scout can run. The contract-pin hook
+belongs immediately before that policy setup. Queued session tokens remain
+in-memory only and are removed on startup, cancellation or shutdown. Preflight,
+Scout and managed execution share bounded runtime slots.
+
+`runtime.copilot_only` defaults to true. This restricts CodePlane-managed
+provider integrations, not model families served by Copilot or manually typed
+terminal commands. Disabled integrations retain their code, configuration and
+history. Explicit disabled execution fails before side effects, and disabled
+in-flight managed jobs fail explicitly during recovery rather than changing SDK.
+
+Native observation uses deterministic source identities and a validated source
+checkpoint. CodePlane job identity owns persistence and SSE routing. Replayed
+records do not repeat execution, permission decisions or durable projections.
+Observation failure does not imply the external agent stopped.
+
+Approval decisions remain durable across waiter races and server restart.
+Explicit approval markers cannot be waived by bulk trust. Superseded SDK
+permission invocations are retired with a reason, while independent tracker and
+task-spawn approvals are retained.
+
+Coordinated dispatch uses an exact live-execution token and refuses stale,
+non-running or gated targets. It never implicitly resumes or unpauses a job.
+Admission is distinct from execution, and uncertain delivery is not retried.
+
+Project creation and Chat responses are fenced by their exact target and
+operation generation. A completed request for an old form or conversation
+cannot clear a new draft, change the selected Chat, or navigate a newer view.
+Late clone/init results retain repository files and report registration
+cleanup separately. Chat drafts remain scoped to their conversation, and
+retrying a failed conversation read never resends a Chat or Job command.
+
+Project Boards read persisted Project ownership rather than the browser's Job
+page or a Project's current repository list. The four projected columns are
+Ready / blocked, In Progress, Needs a decision and Failed. A linked Task and Job
+share one work card; recipe steps are nested evidence, not extra work items.
+Full-scope totals name task, linked-Job, standalone-Job and approval units.
+Column, approval and tracker-delivery reads are bounded and paginated.
+Each Board response reads its totals, columns and hydrated items from one
+database snapshot. A column page also retains one snapshot while hydrating its
+items; later page requests remain live reads, not a frozen multi-page view.
+Pending approvals remain visible on completed or archived Jobs. Tracker
+approval and delivery states remain distinct from code completion.
+
+Task inspection returns its full stored prompt or explicitly labeled historical
+source reference, predecessor delivery conditions and current Start eligibility
+from the shared execution service. Inspecting never creates a Job, worktree or
+approval. Start rechecks the same conditions rather than trusting a prior read.
+
+Verification results describe completed, failed or interrupted verification
+agent turns. Completion is not proof of test success or operator acceptance.
+The existing review/completed distinction remains.
+
+Remote mode enforces credentials on HTTP, SSE and WebSockets throughout startup
+and steady state, including connector traffic arriving from loopback. Explicit
+passwords are preserved. Access-only mode requires an explicit selection and
+per-request verified JWT. Preview transport never forwards control-plane
+credentials or cookies and enforces the decoded response limit during reading.
+
+Access-only detached restart uses the operator's existing cached Cloudflare
+application JWT, privately retrieved before the adoption deadline begins.
+Missing or unusable credentials fail before mutation, without initiating login.
+A private inherited pipe carries a versioned, length-prefixed credential frame
+of at most 64 KiB bound to request ID, server PID/creation time and exact HTTPS
+origin. The helper verifies identity and authenticates a protected read on the
+old loopback listener before adoption. Only a separate matching parent commit
+permits pause/stop; parent death, EOF, invalid input or timeout before commit
+aborts. Committed helpers survive parent exit. Credentials are confined to
+memory and the pipe, restricted to old-listener job-list/pause requests, and
+dropped before stop/replacement. No credential is stored in argv, environment,
+files, logs or status. Replacement retains Access-only. This is single-use
+transport of an ordinary JWT, not a restart-scoped server credential.
+
 ## Table of Contents
 
 1. [Product Overview](#1-product-overview)
@@ -636,6 +1517,17 @@ authority. The UI also supports operator-attributed relay notes. Both paths are
 restricted to the same project and currently running managed Copilot recipients.
 Paused, gated, canceled, or finished sessions are not resumed by delivery.
 Verification and self-review sessions do not inherit peer tools.
+
+For recipe jobs, the directory exposes a paginated menu of instantiated agent
+cards with purpose, provider/model, current status, attempt/session identity, and
+delivery availability. Mixed-provider recipes remain discoverable, but only
+eligible Copilot executions accept these notes. Senders choose an agent rather
+than an arbitrary primary session. An attempt ID and execution token bind each
+recipe delivery to that exact execution; stale selections reject instead of
+silently targeting a replacement. Sibling agents in one recipe may communicate,
+but an agent cannot send to itself. Cards refresh in the UI and require explicit
+selection. An unavailable prior selection can still retrieve its original
+delivery receipt without changing the saved request or erasing an edited draft.
 
 Each message ID reserves a durable receipt before transport. Reusing an ID with
 the identical request returns that receipt without sending again; conflicting
@@ -1587,7 +2479,7 @@ server:
 runtime:
   max_concurrent_jobs: 2
   worktrees_dirname: .codeplane-worktrees
-  utility_model: gpt-4o-mini        # cheap/fast model for naming, summaries
+  utility_model: claude-haiku-4.5   # default utility model for naming and summaries
   default_sdk: copilot              # copilot | claude — SDK used when not overridden per-job
   suppressed_preflight_agent_prompts: []
 
@@ -1659,6 +2551,22 @@ tools:
       env:
         DATABASE_URL: "${DATABASE_URL}"
 ```
+
+Missing or blank `runtime.utility_model` uses `claude-haiku-4.5`. An explicit
+nonblank model choice is preserved. This default is not a claim of lower billing.
+
+`runtime.utility_sdk` optionally selects a registered text-completion provider.
+When omitted, utility calls use the existing enabled-provider/default-SDK policy,
+independently of the primary work harness. Model choices are validated against the
+actual selected provider and never silently replaced. `copilot_only` applies to
+utility calls, including cached text sessions. Unavailable providers fail explicitly.
+This override applies to assessment, titles, monitoring, narration and text sidecars,
+not tool-using Scout or agentic sidecar execution. Those retain their execution
+binding and existing model override precedence.
+The enforcement recommendation contract preserves the five existing wire values
+without importing TraceForge's title runtime. This removes the import dependency
+from monitor/router construction, not the still-pending production governance and
+enrichment cutover.
 
 Entries support glob patterns via Python's `glob.glob`. Each pattern is expanded at startup and re-expanded when the config is reloaded. Only directories that are valid git repositories (contain `.git`) are included after expansion.
 
@@ -2579,7 +3487,31 @@ Retention cleanup removes:
 4. Worktree directories for jobs in terminal states older than the retention period
 
 Job records and events are never deleted. They serve as an audit log.
-```
+
+### 16.5 Recoverable Task Starts and Tracker Delivery
+
+`TaskExecutionService` is application-scoped and shared by REST, MCP, and completion subscribers. It performs read-only Job preflight before a short serialized transaction that revalidates eligibility, creates the `preparing` Job, and attaches it to its TaskLink. Git discovery and naming do not commit a jobless reservation. Cancellation before commit leaves a retryable task. After commit, the existing runtime recovers the linked Job and prepares its workspace.
+
+Completion projections use conditional state updates. Replayed completion events cannot overwrite a live start. A dependency is satisfied only by a persisted completed Job resolved as `merged` or `pr_created`. Chat gating remains chain-scoped. The task transaction commits and closes before requesting an approval through `ApprovalService`. Structured spawn actions retain the predecessor's Job attempt, and legacy `spawn_task:<id>` approvals remain readable. Startup reconciles abandoned legacy claims and approved starts before admitting new commands, without starting the same Job twice.
+
+Tracker approval and delivery are separate durable facts. Each `tracker_operations` row holds an immutable request identity, exact target and content, canonical approval association, dispatch phase, and outcome. Repeated recipe completion for the same Job attempt reuses the same source identity. The managed worker survives a canceled request caller and reconstructs approval associations after restart. Tracker output failure never changes a successfully completed task into a failed task.
+
+Operations progress through `awaiting_approval`, `approved`, and `dispatching`. An acknowledged write becomes `applied`, a denial becomes `rejected`, and a definite nondelivery becomes `failed`. A lost response or interrupted dispatch becomes `uncertain`. Neither restart nor retry automatically repeats an uncertain comment. The operator must record evidence of delivery or nondelivery. Confirmed nondelivery becomes `not_applied`; a subsequent retry is a distinct linked operation requiring fresh explicit approval. Reconciliation and retry use an expected-version compare-and-set.
+
+Live Job, Project, TaskLink, TrackerLink, and Approval correlations use nullable `ON DELETE SET NULL` foreign keys. Immutable references and approval/receipt/reconciliation evidence remain available for history. Missing live dependencies prohibit dispatch; snapshots do not authorize a write or silently bind a replacement target. Existing archive and artifact/worktree retention behavior remains unchanged. Legacy approved tracker requests without dispatch evidence are imported as uncertain, never assumed delivered or replayed.
+
+`tracker.operation_updated` is an allowlisted SSE event delivered after the operation commit. It reaches global connections and the associated Job connection. An operation with a deleted Job uses an unassociated global event rather than inserting an invalid Job-FK event. The frontend stores these records centrally, hydrates them after reconnect, and protects newer versions and deleted correlations from stale replay.
+
+GitHub tracker reads display Projects v2 **Project Status**. The existing GitHub `transition` command changes the underlying issue's **Issue state** (`open` or `closed`), including the existing `Done` alias for closing an issue. Approval and outcome labels name that operation explicitly. It does not mutate Project Status.
+
+Project-scoped history and operator commands are available at:
+
+- `GET /api/projects/{project_id}/tracker-links/operations`, optionally filtered by `job_ref` or `tracker_link_ref`.
+- `GET /api/projects/{project_id}/tracker-links/operations/{operation_id}`.
+- `POST .../{operation_id}/reconcile` with `expectedVersion`, `resolution`, and delivery `evidence`.
+- `POST .../{operation_id}/retry` with `expectedVersion` and a stable caller `requestId`.
+
+The existing tracker panel shows pending approval, precise targets, receipts, failures, and uncertain delivery. Evidence is retained after a recoverable error. An uncertain operation has no retry action until nondelivery is established.
 
 ---
 
@@ -2976,13 +3908,16 @@ All errors return a consistent envelope:
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/api/jobs/{job_id}/share` | Generate a read-only share token (24 h TTL) |
+| `DELETE` | `/api/jobs/{job_id}/share/{token}` | Operator-authenticated, job-scoped revocation (idempotent 204) |
 | `GET` | `/api/share/{token}/job` | Job detail via share token (bypasses password auth) |
 | `GET` | `/api/share/{token}/events` | SSE stream for the shared job (bypasses password auth) |
+| `GET` | `/api/share/{token}/snapshot` | Read-only job snapshot via share token |
+| `GET` | `/api/share/{token}/telemetry` | Read-only job telemetry via share token |
 
 #### Create Share Link — Response
 
 ```json
-201 Created
+200 OK
 {
   "token": "dGhpcyBpcyBhIHRva2Vu...",
   "jobId": "job-104",
@@ -2990,7 +3925,9 @@ All errors return a consistent envelope:
 }
 ```
 
-Share tokens are ephemeral (in-memory, 24-hour TTL). If the server restarts, all tokens are invalidated. Share endpoints bypass CodePlane's password authentication but provide strictly read-only access — no approval, cancel, or message operations are possible.
+Share tokens persist across server restarts with a fixed 24-hour UTC expiry. Only SHA-256 token hashes are stored in the database. Operator-authenticated revocation deletes the matching job's credential; unknown, already revoked, or wrong-job tokens return 204 without changing other links. Expired credentials are pruned when new links are created. Shared SSE streams revalidate before every delivery and close on expiry or revocation, with idle connections checked every five seconds. Share endpoints bypass CodePlane's password authentication but provide strictly read-only access: no approval, cancel, or message operations are possible. Access-only mode still requires a valid Cloudflare Access JWT.
+
+Previously issued in-memory links cannot be migrated and must be reissued after upgrading.
 
 > **Scope:** Share tokens bypass CodePlane's password gate only. They do **not** bypass tunnel-level identity gates (Dev Tunnels requires Microsoft login; Cloudflare Tunnels requires the Access policy). Share links are useful for giving read-only access to team members who can already reach the server — e.g. via the same tunnel, LAN, or localhost.
 
@@ -3120,7 +4057,7 @@ Hard-gated commands return `ask` from the permission policy. The agent system pr
 
 ### 18.3 Action Policy Presets
 
-CodePlane delegates the permission decision to **`traceforge.governance`**. Three presets control posture; each preset *selects a governance profile* — a recommendation-rules file, a count/effect budget, protected-path and cost-pressure primitives, and CodePlane's per-preset USD spend ceiling — rather than mapping actions to a fixed tier. The profiles live in `action_policy/preset_profiles.py`.
+CodePlane selects policy rules through the pinned **Agent Governance Toolkit** implementation and enforces them through its application-owned authority. Three presets retain distinct count/effect budgets, protected-path checks and configured verified-USD warning/escalation lines. Missing evidence and mandatory security gates cannot be waived by routine grants or the monitor.
 
 | Preset | Governance profile |
 |------|----------|
@@ -3130,7 +4067,7 @@ CodePlane delegates the permission decision to **`traceforge.governance`**. Thre
 
 #### Recommendation → enforcement
 
-For each action the governance substrate returns a `RecommendedAction` plus a risk score/band and a reason code. The router maps the recommendation to a concrete outcome:
+For each action the authority returns an action and reason code. Unavailable risk scores remain null, not an invented zero. The router maps the recommendation to a concrete outcome:
 
 | RecommendedAction | Enforcement |
 |------|----------|
@@ -3140,7 +4077,7 @@ For each action the governance substrate returns a `RecommendedAction` plus a ri
 | `ESCALATE` | LLM monitor (if enabled and not security-critical) → human approval gate |
 | `DENY` | Human approval gate (the monitor is skipped — a `DENY` always reaches a human) |
 
-A `None` recommendation (no rule fired, risk below every threshold) is an implicit `ALLOW`; any internal error fails **closed** to `ESCALATE`.
+Missing or unrecognized policy results fail closed to an individual human decision.
 
 #### Hard-Gated Commands
 
@@ -3157,7 +4094,7 @@ Default: `supervised`
 
 ### 18.4 Delegation to the Agent Runtime
 
-The underlying agent SDK (Copilot SDK, Claude Code, etc.) decides **which** actions surface a permission request. CodePlane's action policy router then evaluates the request through `traceforge.governance` and enforces the resulting `RecommendedAction`.
+The underlying agent SDK (Copilot SDK, Claude Code, etc.) decides **which** actions surface a permission request. CodePlane's bound session policy evaluates each request through the pinned authority and enforces its resulting action.
 
 CodePlane's role is to:
 
@@ -3187,7 +4124,7 @@ The adapter normalizes whichever fields the SDK provides into this common shape.
 1. SDK raises a permission request (e.g., Copilot SDK calls `on_permission_request`)
 2. The action policy router evaluates the request:
    - **Hard-gated commands (§18.2):** pre-checked before governance — always route to the operator regardless of preset
-   - **Governance decision:** `traceforge.governance` returns a `RecommendedAction` (plus risk score/band and reason code) from the active preset's profile
+   - **Governance decision:** the pinned authority applies the active preset, local constraints, verified usage and scoped grants without erasing mandatory or incomplete-evidence gates
 3. Based on the recommendation:
    - **`ALLOW`:** action proceeds immediately
    - **`WARN` / `TRANSFORM`:** a git savepoint is taken, the action proceeds, and the operator is notified
@@ -3212,7 +4149,7 @@ The SDK's `on_permission_request` callback is **async** — it blocks the SDK at
 
 #### Trust Grant
 
-Operators can issue a **trust grant** via `POST /api/jobs/{job_id}/approvals/trust`. Trust is applied inside governance as a time-boxed (24h), reason-code-scoped grant: a later matching recommendation comes back `ALLOW` until the grant expires. Security-critical verdicts (§18.2 / hard gates) are never waived by a trust grant.
+Operators can issue a **trust grant** via `POST /api/jobs/{job_id}/approvals/trust`. Application-owned grants are time-boxed (24h) and scoped to the Job, exact policy implementation/configuration and reason code. Full human batch approval grants its eligible reasons; partial approval releases only selected action IDs and grants nothing. Security-critical verdicts, incomplete evidence and unavailable policy results are never waived. USD warning and escalation remain soft, verified-currency-only controls, with zero and null overrides preserved.
 
 ### 18.7 Approval Timeout
 
@@ -3583,12 +4520,12 @@ SSE connections are capped at `max_sse_connections` (default: 5) to prevent reso
 Share tokens provide **read-only** access to a single job. Security properties:
 
 - Tokens are 256-bit cryptographically random values (`secrets.token_urlsafe(32)`)
-- 24-hour TTL, stored in-memory only (lost on server restart)
+- Fixed 24-hour UTC expiry, persisted as a token hash across server restarts; operators can revoke a job's link before expiry
 - Share endpoints bypass CodePlane's password authentication but expose only: job metadata, SSE event stream, and progress state
 - No mutation operations are possible via share tokens — approvals, cancellation, messages, and resolution are all blocked
 - The port preview proxy is **not** accessible via share tokens
 - **Share tokens do not bypass tunnel-level identity gates.** Dev Tunnels still requires Microsoft login; Cloudflare Tunnels still requires the Access policy. The viewer must be able to reach the server before the share token matters
-- No audit trail is kept for token creation or access — treat share URLs as sensitive
+- Share credentials, including token prefixes, are not logged by the sharing service. Treat share URLs as sensitive and redact them in external access logs
 
 ### 21.8 Push Notification Security
 
@@ -4026,6 +4963,10 @@ Every REST API capability is exposed as an MCP tool. Related operations are coll
 |---|---|---|---|
 | `codeplane_workspace` | Browse Job Worktree | list, read | `GET /api/jobs/{id}/workspace`, `GET /api/jobs/{id}/workspace/file` |
 | `codeplane_artifact` | Access Job Artifacts | list, get | `GET /api/jobs/{id}/artifacts`, `GET /api/artifacts/{id}` |
+
+#### Tracker Delivery
+
+`codeplane_tracker` exposes `comment`, `transition`, `status`, and `list` for a Job's explicit tracker pairing. Writes require an explicit CodePlane approval and return an operation identity plus a truthful durable outcome. Supplying the same `request_id` deduplicates a retried MCP call. `status` and `list` recover results after disconnection. Approval alone is never reported as applied, and uncertain delivery must not be blindly repeated.
 
 #### Configuration
 

@@ -11,6 +11,7 @@ a running SDK subprocess:
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -104,6 +105,46 @@ class TestBuildPermissionDescription:
 
 
 class TestSessionState:
+    def test_attempt_models_are_verified_independently_without_job_default_writes(self) -> None:
+        from backend.models.domain import SessionConfig
+        from backend.models.events import EventKind
+
+        adapter = _make_adapter()
+        adapter._schedule_db_write = MagicMock()
+        adapter._job_main_models["job"] = "primary-model"
+        for sid, attempt in (("first", "attempt-one"), ("second", "attempt-two")):
+            adapter._queues[sid] = asyncio.Queue()
+            adapter.set_job_id(sid, "job")
+            adapter.set_session_metadata(
+                sid,
+                SessionConfig(
+                    workspace_path="/repo",
+                    prompt="",
+                    job_id="job",
+                    attempt_id=attempt,
+                    execution_epoch="epoch",
+                    recipe_run_id="run",
+                ),
+            )
+        adapter._verify_and_set_model("first", "job", "served-one", "requested-one")
+        adapter._verify_and_set_model("second", "job", "served-two", "requested-two")
+        assert adapter.get_reported_model("first") == "served-one"
+        assert adapter.get_reported_model("second") == "served-two"
+        assert adapter._job_main_models["job"] == "primary-model"
+        adapter._schedule_db_write.assert_not_called()
+        for sid, attempt, actual in (
+            ("first", "attempt-one", "served-one"),
+            ("second", "attempt-two", "served-two"),
+        ):
+            observed = adapter._queues[sid].get_nowait()
+            mismatch = adapter._queues[sid].get_nowait()
+            assert observed.kind == EventKind.model_observed
+            assert mismatch.kind == EventKind.model_downgraded
+            assert observed.payload["actual_model"] == actual
+            assert observed.payload["model_match"] is False
+            assert mismatch.metadata.attempt_id == observed.metadata.attempt_id == attempt
+            assert observed.metadata.run_id == sid and observed.metadata.execution_epoch == "epoch"
+
     def test_set_job_id(self) -> None:
         adapter = _make_adapter()
         adapter.set_job_id("s1", "j1")
@@ -225,6 +266,37 @@ class TestScheduleDbWrite:
 
 
 class TestEvaluatePermission:
+    async def test_attempt_checkpoint_and_policy_use_trusted_session_workspace(self) -> None:
+        from backend.models.domain import SessionConfig
+        from backend.services.auth.permission_policy import PermissionRequest
+
+        adapter = _make_adapter()
+        router = SimpleNamespace(execution_epoch="epoch", authorize_permission=AsyncMock(return_value=True))
+        adapter._policy_router["job"] = router
+        adapter._worktree_paths["job"] = "/primary"
+        adapter.set_session_metadata(
+            "attempt-session",
+            SessionConfig(
+                workspace_path="/attempt",
+                prompt="",
+                job_id="job",
+                attempt_id="attempt",
+                execution_epoch="epoch",
+            ),
+        )
+        decision = await adapter._evaluate_permission(
+            "attempt-session",
+            "job",
+            PermissionRequest(kind="read", workspace_path="/untrusted"),
+            tool_name="Read",
+        )
+        assert decision == PermissionDecision.allow
+        invocation = router.authorize_permission.await_args.args[0]
+        assert invocation.workspace == "/attempt"
+        assert invocation.metadata.execution_epoch == "epoch"
+        assert invocation.metadata.attempt_id == "attempt"
+        assert await invocation.is_current()
+
     @pytest.mark.asyncio
     async def test_paused_session_denied(self) -> None:
         adapter = _make_adapter()
@@ -244,15 +316,14 @@ class TestEvaluatePermission:
         """Trusted jobs are allowed when a policy router is set up (trust goes via router)."""
         adapter = _make_adapter()
 
-        # Set up a policy router that always allows (simulating trust coverage)
-        from unittest.mock import AsyncMock
+        from backend.models.domain import SessionConfig
 
-        mock_decision = MagicMock(proceed=True, checkpoint_ref=None, classification=None)
-        mock_router = MagicMock()
-        mock_router.route = AsyncMock(return_value=mock_decision)
+        mock_router = SimpleNamespace(execution_epoch="epoch", authorize_permission=AsyncMock(return_value=True))
         adapter._policy_router["j1"] = mock_router
         adapter._repo_policies["j1"] = MagicMock()
         adapter._worktree_paths["j1"] = "/tmp"
+        adapter.set_job_id("s1", "j1")
+        adapter.set_session_metadata("s1", SessionConfig(workspace_path="/tmp", prompt="", job_id="j1"))
 
         from backend.services.auth.permission_policy import PermissionRequest
 
@@ -263,6 +334,7 @@ class TestEvaluatePermission:
             tool_name="Read",
         )
         assert result == PermissionDecision.allow
+        mock_router.authorize_permission.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_git_reset_hard_blocked(self) -> None:
@@ -283,7 +355,7 @@ class TestEvaluatePermission:
         assert result == PermissionDecision.deny
 
     @pytest.mark.asyncio
-    async def test_git_reset_hard_approved(self) -> None:
+    async def test_approval_service_cannot_replace_current_policy_router(self) -> None:
         mock_approval = MagicMock()
         mock_approval.create_request = AsyncMock(return_value=MagicMock(id="a1"))
         mock_approval.wait_for_resolution = AsyncMock(return_value="approved")
@@ -298,4 +370,5 @@ class TestEvaluatePermission:
             PermissionRequest(kind="shell", workspace_path="", full_command_text="git reset --hard HEAD~1"),
             tool_name="Bash",
         )
-        assert result == PermissionDecision.allow
+        assert result == PermissionDecision.deny
+        mock_approval.create_request.assert_not_awaited()

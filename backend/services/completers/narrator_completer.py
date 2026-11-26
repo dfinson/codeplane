@@ -7,6 +7,7 @@ Implements ``Completable`` so it can be injected directly into
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from pathlib import Path
@@ -14,8 +15,10 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from backend.services.adapters.agent_adapter import UtilityCompletionError
+
 if TYPE_CHECKING:
-    from backend.services.adapters.agent_adapter import AgentAdapterInterface
+    from backend.services.adapters.contracts import TextCompletionProvider
 
 log = structlog.get_logger()
 
@@ -48,7 +51,7 @@ class NarratorCompleter:
 
     def __init__(
         self,
-        adapter: AgentAdapterInterface,
+        adapter: TextCompletionProvider,
         *,
         model: str = "claude-haiku-4-5",
     ) -> None:
@@ -72,13 +75,21 @@ class NarratorCompleter:
             "Do not use any tools, do not read or write files, do not run commands. "
             "Just produce the written content directly."
         )
-        result = await self._adapter.complete(
-            prompt,
-            model=self._model,
-            system_message=system_msg,
-            excluded_tools=["*"],
-        )
-        return result.text or ""
+        try:
+            result = await asyncio.wait_for(
+                self._adapter.complete(
+                    prompt,
+                    model=self._model,
+                    system_message=system_msg,
+                    excluded_tools=["*"],
+                ),
+                timeout=timeout,
+            )
+        except TimeoutError as exc:
+            raise UtilityCompletionError("Narration timed out", reason="timeout") from exc
+        if not result.text or not result.text.strip():
+            raise UtilityCompletionError("Narration returned no text", reason="empty_response")
+        return result.text
 
     async def close(self) -> None:
         """No-op — no resources to clean up."""

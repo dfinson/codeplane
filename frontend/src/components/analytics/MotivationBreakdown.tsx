@@ -83,10 +83,10 @@ export function MotivationBreakdown({ data }: Props) {
         {motivationBuckets
           .sort((a, b) => (b.costUsd ?? 0) - (a.costUsd ?? 0))
           .map((bucket) => {
-            const cost = bucket.costUsd ?? 0;
-            const pct = total > 0 ? (cost / total) * 100 : 0;
+            const cost = bucket.costUsd;
+            const pct = cost == null ? null : total > 0 ? (cost / total) * 100 : 0;
             const meta = MOTIVATION_META[bucket.bucket] || { bg: "bg-gray-400", label: bucket.bucket };
-            return pct > 0 ? (
+            return pct != null && pct > 0 ? (
               <Tooltip key={bucket.bucket} content={`${meta.label}: ${formatUsd(cost)} (${pct.toFixed(1)}%)${"description" in meta ? ` — ${meta.description}` : ""}`}>
                 <div
                   className={`${meta.bg} transition-all`}
@@ -102,8 +102,8 @@ export function MotivationBreakdown({ data }: Props) {
         {motivationBuckets
           .sort((a, b) => (b.costUsd ?? 0) - (a.costUsd ?? 0))
           .map((bucket) => {
-            const cost = bucket.costUsd ?? 0;
-            const pct = total > 0 ? (cost / total) * 100 : 0;
+            const cost = bucket.costUsd;
+            const pct = cost == null ? null : total > 0 ? (cost / total) * 100 : 0;
             const meta = MOTIVATION_META[bucket.bucket] || {
               label: bucket.bucket,
               color: "text-foreground",
@@ -122,7 +122,7 @@ export function MotivationBreakdown({ data }: Props) {
                   )}
                 </div>
                 <span className="text-foreground">
-                  {formatUsd(cost)} <span className="text-muted-foreground">({pct.toFixed(1)}%)</span>
+                  {formatUsd(cost)} <span className="text-muted-foreground">({pct == null ? "unknown share" : `${pct.toFixed(1)}%`})</span>
                 </span>
               </div>
             );

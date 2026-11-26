@@ -8,8 +8,9 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from backend.config import TrailConfig
-from backend.models.events import TRANSCRIPT_KINDS, EventKind, SessionEvent, new_event
+from backend.models.events import TRANSCRIPT_KINDS, EventKind, SessionEvent, is_admission_receipt, new_event
 from backend.persistence.trail_repo import TrailNodeRepository
+from backend.services.events.observation import is_observation_history
 from backend.services.tools.parsing_utils import ensure_dict
 from backend.services.trail.enricher import TrailEnricher
 from backend.services.trail.node_builder import TrailNodeBuilder
@@ -31,7 +32,7 @@ def _plan_role_for_kind(kind: EventKind | str) -> str | None:
         return "agent"
     if kind == EventKind.message_user:
         return "operator"
-    if kind == EventKind.tool_call_completed:
+    if kind in (EventKind.tool_call_completed, EventKind.tool_call_failed):
         return "tool_call"
     return None
 
@@ -115,6 +116,8 @@ class TrailService:
         tool tracking, native-plan capture, and auto-naming is driven
         from here so both paths get identical treatment.
         """
+        if is_observation_history(event) or is_admission_receipt(event):
+            return
         await self._node_builder.handle_event(event)
 
         if event.kind in TRANSCRIPT_KINDS:

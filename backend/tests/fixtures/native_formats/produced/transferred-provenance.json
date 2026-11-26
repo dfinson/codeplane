@@ -1,0 +1,75 @@
+{
+  "specification_sha256": "9941bd11323740358f158baf953083d192873f03b610708d9fad10934aee29c5",
+  "mapping_contract_revision": "46e0340b7bb3fd4740f8dba02a5e7586fa26608f",
+  "transfer_verification": "Exact length and SHA256 checked locally before fixture import. Capture execution and source correspondence were reported by the named programme capture owners, not rerun by this qualification worker.",
+  "antigravity": {
+    "file": "antigravity-0.1.5.history.jsonl",
+    "bytes": 2042,
+    "sha256": "3dfd6adcd8e07407970da8b3f024b866270e0a3d7b05522e99764c0fbdc1c38b",
+    "physical_records": 5,
+    "classification": "actual native SDK connection/receive/history path with inert local OutputEvent input",
+    "producer": "google-antigravity",
+    "version": "0.1.5",
+    "runtime": "Windows CPython 3.12.10",
+    "distribution": "official win_amd64 wheel",
+    "wheel_sha256": "e8707b7fc64c887edf27176b1e8aa52e6cfe50e51dc2d04ef4f57f7ad26f65ee",
+    "native_path": "Conversation.send -> shipped TestWebSocket -> LocalConnection -> Conversation.receive_steps -> Conversation.history",
+    "direct_step_construction": false,
+    "source_reference": "ae14af2d67fe6f792a9b887ae281fdb5b7f30c9d",
+    "installed_correspondence": {
+      "test_utils": {"git_blob": "c26b4bce3bf533cf863de901a700dc06a8ebd721", "matches_tag": true},
+      "conversation": {"git_blob": "e73801d4a09345b5a607e995e4d3ca9e6b3501e5", "matches_tag": true},
+      "local_connection": {
+        "git_blob": "e7a24577af8b4f904048c4764d27ccb966cdc664",
+        "sha256": "48e7b39e2069eaaceb808a4febe523e43a4a03eebf97c6baa433c9d5ee69a50c",
+        "matches_tag": false
+      },
+      "pb2": {
+        "git_blob": "a264e1bf3c807377cb266d0e0083a12d96d85706",
+        "sha256": "f71df2b52d213c45665fad8cfdc3dc8de9a276a830cc57ea0aee383b76121958",
+        "matches_tag": false
+      }
+    },
+    "capture_owner": "55d2f5af-7228-4b4c-a977-fe299c575938",
+    "full_artifacts": "C:\\agent-artifacts\\55d2f5af-7228-4b4c-a977-fe299c575938\\native-captures\\antigravity",
+    "evidence_limit": "Actual wheel correspondence, not assumed Git-tag equivalence. No live Go harness, IDE or vendor/model conversation. Socket/process denial probes passed and capture attempted neither. Tool results and usage remain unknown."
+  },
+  "cline": {
+    "file": "cline-4.1.3.ui-updates.jsonl",
+    "bytes": 674,
+    "sha256": "eff11edc2c5dd98846d423e32454793e33a3683fecde075294a8a545aea34fc3",
+    "physical_records": 7,
+    "classification": "inert source-built native SDK-event-to-UI producer",
+    "producer": "cline/cline",
+    "version": "4.1.3",
+    "revision": "bbfcbcd31d8c2b2de30ea1d8143b85b17f8ed109",
+    "producer_file": "apps/vscode/src/sdk/message-translator.ts",
+    "producer_blob": "62f759b65e71353c3bb7495981b16ec32e735697",
+    "license": "Apache-2.0",
+    "runtime": {"node": "24.21.0", "typescript": "5.8.3"},
+    "native_path": "7 inert CoreSessionEvent inputs -> actual MessageTranslatorState and native MessageIdMinter -> 7 native UI updates",
+    "source_correspondence": "Unmodified release source. 14 source/dependency files Git-blob verified, 9 actually loaded. @cline/core and @cline/shared resolve normal native leaf exports to exact apply-patch-parser.ts and prompt/format.ts, not stub values.",
+    "direct_cline_message_construction": false,
+    "capture_owner": "55d2f5af-7228-4b4c-a977-fe299c575938",
+    "full_artifacts": "C:\\agent-artifacts\\55d2f5af-7228-4b4c-a977-fe299c575938\\native-captures\\cline",
+    "qualification_envelope": {
+      "id": "Exact native message.ts integer, unchanged and not epoch-seeded",
+      "_codeplane_source_format": {"producer": "cline", "version": "4.1.3", "representation": "sdk-ui-update"},
+      "message": "Unmodified decoded native UI record from the retained byte fixture"
+    },
+    "evidence_limit": "Not a live CLI/VSCode conversation or raw session.messages.json storage. ts values 1/2/3 are native minter identities, not wall-clock timestamps. Repeated identities are actual partial/final UI updates. The app-owned envelope selects these semantics explicitly; untagged flat records retain legacy timestamp-backed behavior. Final UI tool content omits the original CoreSessionEvent output/success fields and cannot prove execution completion, success or duration. Completion banners are not session-terminal proof. The verified translator also defaults missing SDK metrics to zero in UI display data; these values are not promoted to known execution usage or cost. Usage and tool correlation IDs are absent in this capture. Socket/process guards were self-tested with zero capture attempts."
+  },
+  "copilot_markdown": {
+    "file": "copilot-1.0.108.session-store-turns.json",
+    "bytes": 13937,
+    "sha256": "72a69b33c108cba01657d7efcd80728b0f2e761c89c1b733e4d9d1005b1d1f39",
+    "classification": "real CLI-written SQLite turns from previously executed synthetic Context/Implementation journeys",
+    "producer": "GitHub Copilot CLI",
+    "version": "1.0.108",
+    "transfer_commit": "4c826221a2759ac315412e8c9554525bc3fb5486",
+    "capture_owner": "bce5d24b-b4a8-4f96-850d-f026ef733e68",
+    "source_product_head": "cdec74bafb148254f5c60c72f80eb617eac7ee01",
+    "native_rows": 2,
+    "evidence_limit": "Historical producer proof, not current-head end-to-end acceptance. Only two harmless sum.py/check.py sessions. Exact native schema and TEXT/BLOB field bytes retained in the artifact. JSONL corroborated version only, not row generation. Source DB/WAL hashes unchanged. Markdown is medium-fidelity and cannot prove native tool execution, tool-call IDs or usage."
+  }
+}

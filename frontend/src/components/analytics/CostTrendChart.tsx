@@ -9,7 +9,7 @@ import { formatUsd } from "./helpers";
 // Cost trend chart
 // ---------------------------------------------------------------------------
 
-export function CostTrendChart({ data }: { data: { date: string; cost: number; jobs: number }[] }) {
+export function CostTrendChart({ data }: { data: import("../../api/types").AnalyticsOverviewResponse["costTrend"] }) {
   if (!data.length) return <p className="text-muted-foreground text-sm">No data yet.</p>;
   return (
     <ResponsiveContainer width="100%" height={220}>
@@ -25,7 +25,7 @@ export function CostTrendChart({ data }: { data: { date: string; cost: number; j
         <YAxis tick={{ fontSize: 11, fill: "#888" }} tickFormatter={(v: number) => `$${v.toFixed(2)}`} />
         <RTooltip
           contentStyle={{ background: "#1a1a2e", border: "1px solid #333", borderRadius: 8, fontSize: 12 }}
-          formatter={(v: TooltipValueType | undefined) => [formatUsd(Number(v ?? 0)), "API-equivalent cost"]}
+          formatter={(v: TooltipValueType | undefined) => [formatUsd(v == null ? null : Number(v)), "Verified USD"]}
           labelFormatter={(l: unknown) => String(l)}
         />
         <Area type="monotone" dataKey="cost" stroke="#6366f1" fill="url(#costGrad)" strokeWidth={2} />

@@ -29,6 +29,9 @@ vi.mock("../../api/client", () => ({
   fetchProjects: vi.fn().mockResolvedValue({ items: [] }),
   fetchProject: vi.fn(),
   fetchProjectTaskLinks: vi.fn().mockResolvedValue({ items: [] }),
+  fetchCurrentRecipeRun: vi.fn().mockResolvedValue({ run: null }),
+  fetchJobPendingDecisions: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
+  fetchReviewHistory: vi.fn().mockResolvedValue({ items: [], nextCursor: null, highWater: 0 }),
 }));
 
 vi.mock("../../hooks/useSSE", () => ({
@@ -93,6 +96,7 @@ function makeJob(overrides: Partial<JobSummary> = {}): JobSummary {
     projectId: "project-1",
     title: "Fix bug",
     state: "review",
+    sessionCount: 1,
     baseRef: "main",
     worktreePath: "/repos/test/.cpl-worktrees/job-1",
     branch: "fix/bug",

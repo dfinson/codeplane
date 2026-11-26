@@ -1,22 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { toast } from "sonner";
 import { SessionIdentityPanel } from "../SessionIdentityPanel";
 import { useSessionCoordination } from "../../store/sessionCoordination";
-import { fetchPeerMessages, fetchSessionDirectory, relayPeerMessage } from "../../api/sessionCoordination";
-import type { Job, PeerMessageResponse, SessionDirectoryResponse } from "../../api/types";
+import { fetchPeerAgents, fetchPeerMessages, fetchSessionDirectory, relayPeerMessage } from "../../api/sessionCoordination";
+import type { Job, PeerMessageResponse, SessionAgentDirectoryResponse, SessionDirectoryResponse } from "../../api/types";
 
 vi.mock("../../api/sessionCoordination", () => ({
   fetchPeerMessages: vi.fn(),
   fetchSessionDirectory: vi.fn(),
   relayPeerMessage: vi.fn(),
+  fetchPeerAgents: vi.fn(),
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 const job: Job = {
   id: "job-1", repo: "/repo", prompt: "Fix bug", state: "running",
   sdk: "copilot", source: "managed", sessionCount: 1, mode: "standard",
+  observationOnly: false,
   baseRef: "main", branch: "fix/bug", worktreePath: "/worktree",
   createdAt: "2026-01-01", updatedAt: "2026-01-01", completedAt: null,
 };
@@ -34,12 +36,28 @@ async function openPanel() {
   await screen.findByText("sdk-new");
 }
 
+async function selectRecipient(id = "peer") {
+  fireEvent.change(screen.getByLabelText("Recipient in this project"), { target: { value: id } });
+  fireEvent.click(await screen.findByRole("radio", { name: `Agent for ${id} running` }));
+}
+
+function agentMenu(target = "peer"): SessionAgentDirectoryResponse {
+  return {
+    jobId: target, observedAt: "2026-01-01", items: [{
+      agentId: "primary", jobId: target, name: `Agent for ${target}`, description: "Implement API",
+      sdk: "copilot", state: "running", executionToken: `${target}-epoch`, acceptsPeerMessages: true,
+      updatedAt: "2026-01-01",
+    }],
+  };
+}
+
 describe("SessionIdentityPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useSessionCoordination.setState({ directories: {}, messages: {}, errors: {}, loading: {} });
     vi.mocked(fetchSessionDirectory).mockResolvedValue(directory);
     vi.mocked(fetchPeerMessages).mockResolvedValue({ items: [], hasMore: false });
+    vi.mocked(fetchPeerAgents).mockImplementation(async (_source, target) => agentMenu(target));
   });
 
   it("copies current SDK identity separately from internal job links and navigates follow-ups", async () => {
@@ -72,7 +90,7 @@ describe("SessionIdentityPanel", () => {
       detail: "Queued by the recipient SDK; not confirmed read or acknowledged", createdAt: "2026-01-01",
     });
     await openPanel();
-    fireEvent.change(screen.getByLabelText("Recipient in this project"), { target: { value: "peer" } });
+    await selectRecipient();
     fireEvent.change(screen.getByLabelText("Note"), { target: { value: "API ready" } });
     fireEvent.click(screen.getByRole("button", { name: "Send peer note" }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Lost response"));
@@ -91,6 +109,67 @@ describe("SessionIdentityPanel", () => {
     await screen.findByText("sdk-new");
   });
 
+  it("offers recipe-agent purposes and sends only to the explicitly selected live attempt", async () => {
+    const menu = agentMenu();
+    menu.items[0] = { ...menu.items[0]!, name: "Reviewer", attemptId: "review", executionToken: "review-token" };
+    menu.items.push({ ...menu.items[0]!, agentId: "build", name: "Builder", attemptId: "build", executionToken: "build-token" });
+    menu.items.push({ ...menu.items[0]!, agentId: "done", name: "Finished", state: "succeeded", acceptsPeerMessages: false });
+    vi.mocked(fetchPeerAgents).mockResolvedValue(menu);
+    vi.mocked(relayPeerMessage).mockRejectedValue(new Error("Lost response"));
+    await openPanel();
+    fireEvent.change(screen.getByLabelText("Recipient in this project"), { target: { value: "peer" } });
+    expect(await screen.findByRole("radio", { name: "Finished succeeded" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Note"), { target: { value: "Review this API" } });
+    expect(screen.getByRole("button", { name: "Send peer note" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("radio", { name: "Builder running" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send peer note" }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(vi.mocked(relayPeerMessage).mock.calls[0]?.[1]).toMatchObject({
+      recipientJobId: "peer", recipientAttemptId: "build", recipientExecutionToken: "build-token",
+    });
+  });
+
+  it("requires reselection after execution changes but can recover the old receipt without losing edited text", async () => {
+    vi.mocked(relayPeerMessage).mockRejectedValueOnce(new Error("Lost response")).mockResolvedValueOnce({
+      messageId: "receipt", senderJobId: job.id, recipientJobId: "peer", content: "Original",
+      senderSessionId: null, recipientSessionId: "sdk-peer", replyTo: null,
+      origin: "operator", status: "accepted", detail: "Queued", createdAt: "2026-01-01",
+    });
+    await openPanel();
+    await selectRecipient();
+    fireEvent.change(screen.getByLabelText("Note"), { target: { value: "Original" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send peer note" }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    const menu = agentMenu();
+    menu.items[0]!.executionToken = "replacement";
+    vi.mocked(fetchPeerAgents).mockResolvedValue(menu);
+    fireEvent.click(screen.getByRole("button", { name: "Refresh agent cards" }));
+    await waitFor(() => expect(screen.getByRole("radio")).not.toBeChecked());
+    expect(screen.getByRole("button", { name: "Send peer note" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Note"), { target: { value: "New unsent draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check previous delivery receipt" }));
+    await screen.findByText("accepted: Queued (message receipt)");
+    expect(vi.mocked(relayPeerMessage).mock.calls[1]?.[1]).toEqual(vi.mocked(relayPeerMessage).mock.calls[0]?.[1]);
+    expect(screen.getByLabelText("Note")).toHaveValue("New unsent draft");
+    fireEvent.click(screen.getByRole("radio"));
+    expect(screen.getByRole("button", { name: "Send peer note" })).toBeEnabled();
+  });
+
+  it("does not display a late agent response for a previous recipient", async () => {
+    let resolveOld!: (value: SessionAgentDirectoryResponse) => void;
+    vi.mocked(fetchPeerAgents).mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }));
+    vi.mocked(fetchSessionDirectory).mockResolvedValue({
+      ...directory, peers: [...directory.peers!, { ...job, id: "peer-2" }],
+    });
+    await openPanel();
+    fireEvent.change(screen.getByLabelText("Recipient in this project"), { target: { value: "peer" } });
+    await waitFor(() => expect(fetchPeerAgents).toHaveBeenCalledTimes(1));
+    await selectRecipient("peer-2");
+    await act(async () => { resolveOld(agentMenu()); });
+    expect(screen.getByRole("radio", { name: "Agent for peer-2 running" })).toBeChecked();
+    expect(screen.queryByRole("radio", { name: "Agent for peer running" })).not.toBeInTheDocument();
+  });
+
   it.each([
     { status: "accepted", edit: "content" },
     { status: "rejected", edit: "content" },
@@ -103,13 +182,13 @@ describe("SessionIdentityPanel", () => {
       ...directory, peers: [...(directory.peers ?? []), { ...job, id: "peer-2", title: "Other task" }],
     });
     await openPanel();
-    fireEvent.change(screen.getByLabelText("Recipient in this project"), { target: { value: "peer" } });
+    await selectRecipient();
     fireEvent.change(screen.getByLabelText("Note"), { target: { value: "API ready" } });
     fireEvent.click(screen.getByRole("button", { name: "Send peer note" }));
     await waitFor(() => expect(relayPeerMessage).toHaveBeenCalledTimes(1));
 
     if (edit === "recipient") {
-      fireEvent.change(screen.getByLabelText("Recipient in this project"), { target: { value: "peer-2" } });
+      await selectRecipient("peer-2");
     } else {
       fireEvent.change(screen.getByLabelText("Note"), { target: { value: "New unsent note" } });
       if (edit === "restore") {
@@ -148,7 +227,7 @@ describe("SessionIdentityPanel", () => {
       detail: "Delivery could not be confirmed", createdAt: "2026-01-01",
     });
     await openPanel();
-    fireEvent.change(screen.getByLabelText("Recipient in this project"), { target: { value: "peer" } });
+    await selectRecipient();
     fireEvent.change(screen.getByLabelText("Note"), { target: { value: "API ready" } });
     fireEvent.click(screen.getByRole("button", { name: "Send peer note" }));
     await screen.findByText(/unknown: Delivery could not be confirmed/);
@@ -166,12 +245,12 @@ describe("SessionIdentityPanel", () => {
     const { rerender } = render(renderPanel(job));
     fireEvent.click(screen.getByRole("button", { name: "Session details and peers" }));
     await screen.findByText("sdk-new");
-    const sendNote = () => {
-      fireEvent.change(screen.getByLabelText("Recipient in this project"), { target: { value: "peer" } });
+    const sendNote = async () => {
+      await selectRecipient();
       fireEvent.change(screen.getByLabelText("Note"), { target: { value: "API ready" } });
       fireEvent.click(screen.getByRole("button", { name: "Send peer note" }));
     };
-    sendNote();
+    await sendNote();
     await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
     const nextJob = { ...job, id: "job-2" };
     vi.mocked(fetchSessionDirectory).mockResolvedValue({ ...directory, job: nextJob });
@@ -180,7 +259,7 @@ describe("SessionIdentityPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Session details and peers" }));
     expect(await screen.findByLabelText("Note")).toHaveValue("");
     expect(screen.getByLabelText("Recipient in this project")).toHaveValue("");
-    sendNote();
+    await sendNote();
     await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(2));
     const calls = vi.mocked(relayPeerMessage).mock.calls;
     expect(calls[0]?.[0]).toBe("job-1");

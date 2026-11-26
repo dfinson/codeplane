@@ -24,6 +24,7 @@ from backend.models.api_schemas import (
     SecondarySessionResponse,
     TranscriptPayload,
     TurnSummaryPayload,
+    VerificationResultResponse,
 )
 from backend.models.domain import JobState
 from backend.models.events import TRANSCRIPT_KINDS, TRANSCRIPT_STREAMING_KINDS, EventKind
@@ -55,7 +56,7 @@ def _tool_args_to_str(arguments: Any) -> str | None:
         return None
     if isinstance(arguments, str):
         return arguments
-    if isinstance(arguments, dict):
+    if isinstance(arguments, (dict, list)):
         return json.dumps(arguments, ensure_ascii=False)
     return str(arguments)
 
@@ -68,7 +69,14 @@ def _tool_visibility(e: Any) -> str | None:
 
 
 def _is_hidden_tool_event(e: Any) -> bool:
-    if e.kind not in (EventKind.tool_call_started, EventKind.tool_call_completed, EventKind.tool_result_chunk):
+    if e.kind == EventKind.tool_call_failed or e.payload.get("success") is False:
+        return False
+    if e.kind not in (
+        EventKind.tool_call_started,
+        EventKind.tool_call_completed,
+        EventKind.tool_call_failed,
+        EventKind.tool_result_chunk,
+    ):
         return False
     return _tool_visibility(e) == "hidden"
 
@@ -97,13 +105,13 @@ def _metadata_tool_display(e: Any, *, full: bool = False) -> str | None:
             str(tool_name),
             arguments,
             tool_result=e.payload.get("result") or None,
-            tool_success=e.payload.get("success") is not False,
+            tool_success=e.kind != EventKind.tool_call_failed and e.payload.get("success") is not False,
         )
     return format_tool_display_full(
         str(tool_name),
         arguments,
         tool_result=e.payload.get("result") or None,
-        tool_success=e.payload.get("success") is not False,
+        tool_success=e.kind != EventKind.tool_call_failed and e.payload.get("success") is not False,
     )
 
 
@@ -142,13 +150,25 @@ def _build_transcript(
             timestamp=e.payload.get("timestamp", e.timestamp),
             kind=str(e.kind),
             content=e.payload.get("content", ""),
+            admission_status=e.payload.get("admission_status"),
+            execution_status=e.payload.get("execution_status"),
+            operator_content=e.payload.get("operator_content"),
             title=e.payload.get("title"),
             turn_id=e.payload.get("turn_id"),
+            tool_call_id=e.payload.get("tool_call_id"),
+            metadata=e.metadata,
+            pairing_status=e.payload.get("_codeplane_pairing", {}).get("status"),
+            pairing_reason=e.payload.get("_codeplane_pairing", {}).get("reason"),
             tool_name=e.payload.get("tool_name"),
             arguments=_tool_args_to_str(e.payload.get("arguments")),
-            result=e.payload.get("result"),
-            success=e.payload.get("success"),
-            tool_issue=e.payload.get("tool_issue"),
+            result=_tool_args_to_str(e.payload.get("result")),
+            success=False if e.kind == EventKind.tool_call_failed else e.payload.get("success"),
+            tool_issue=_tool_args_to_str(
+                e.payload.get("tool_issue")
+                or (
+                    e.payload.get("error") or e.payload.get("message") if e.kind == EventKind.tool_call_failed else None
+                )
+            ),
             tool_intent=_metadata_tool_intent(e),
             tool_title=e.payload.get("tool_title"),
             tool_display=_metadata_tool_display(e),
@@ -214,7 +234,12 @@ async def _build_diff(
     diff_service: DiffService,
 ) -> list[DiffFileModel]:
     diff: list[DiffFileModel] = []
-    if job.state in (JobState.running, JobState.waiting_for_approval) and job.worktree_path:
+    if (
+        getattr(job, "observation_only", False) is not True
+        and job.state in (JobState.running, JobState.waiting_for_approval)
+        and job.worktree_path
+        and job.base_ref
+    ):
         with contextlib.suppress(GitError, OSError):
             diff = await diff_service.calculate_diff(job.worktree_path, job.base_ref)
     if not diff:
@@ -239,6 +264,8 @@ async def _build_approvals(
             requested_at=a.requested_at,
             resolved_at=a.resolved_at,
             resolution=a.resolution,
+            requires_explicit_approval=a.requires_explicit_approval,
+            notes=a.notes,
         )
         for a in db_approvals
     ]
@@ -266,28 +293,37 @@ def _build_turn_summaries(
         inherited_new: dict[str, bool] = {}  # replacing_turn_id → inherited flag
         for idx, ev in enumerate(turn_summary_events):
             tid = ev.payload.get("turn_id", "")
+            key = f"{ev.payload.get('kind', '')}:{tid}"
             if tid:
-                if tid not in first_new:
-                    first_new[tid] = bool(ev.payload.get("is_new_activity", False))
-                latest[tid] = idx
+                if key not in first_new:
+                    first_new[key] = bool(ev.payload.get("is_new_activity", False))
+                previous = latest.get(key)
+                previous_version = (
+                    turn_summary_events[previous].payload.get("version", 0) if previous is not None else -1
+                )
+                if ev.payload.get("version", 0) >= previous_version:
+                    latest[key] = idx
             replaces = ev.payload.get("replaces_turn_id")
             if replaces:
                 replaced_turn_ids.add(replaces)
                 # The replacing entry inherits the replaced entry's is_new_activity
-                if replaces in first_new:
-                    inherited_new[tid] = first_new[replaces]
+                replaced_key = f"{ev.payload.get('kind', '')}:{replaces}"
+                if replaced_key in first_new:
+                    inherited_new[tid] = first_new[replaced_key]
         keep_idxs = set(latest.values())
         return [
             TurnSummaryPayload(
                 job_id=job_id,
                 turn_id=ev.payload.get("turn_id", ""),
                 title=ev.payload.get("title", ""),
+                kind=ev.payload.get("kind"),
+                version=ev.payload.get("version"),
                 activity_id=ev.payload.get("activity_id", ""),
                 activity_label=ev.payload.get("activity_label", ""),
                 activity_status=ev.payload.get("activity_status", "active"),
                 is_new_activity=inherited_new.get(
                     ev.payload.get("turn_id", ""),
-                    first_new.get(ev.payload.get("turn_id", ""), False),
+                    first_new.get(f"{ev.payload.get('kind', '')}:{ev.payload.get('turn_id', '')}", False),
                 ),
                 replaces_turn_id=ev.payload.get("replaces_turn_id"),
             )
@@ -302,6 +338,8 @@ def _build_turn_summaries(
             job_id=job_id,
             turn_id=ev.payload.get("turn_id", ""),
             title=ev.payload.get("title", ""),
+            kind=ev.payload.get("kind"),
+            version=ev.payload.get("version"),
             activity_id=ev.payload.get("activity_id", ""),
             activity_label=ev.payload.get("activity_label", ""),
             activity_status=ev.payload.get("activity_status", "active"),
@@ -431,13 +469,17 @@ async def assemble_snapshot(
                         output=row.output,
                         input_tokens=row.input_tokens or 0,
                         output_tokens=row.output_tokens or 0,
-                        cost_usd=row.cost_usd or 0.0,
+                        # The legacy secondary-session number carries no currency proof.
+                        cost_usd=None,
                         entries=entries,
                     )
                 )
         except Exception:
             pass  # graceful degradation — don't break snapshot if table doesn't exist yet
 
+    verification_events = await svc.list_events_by_job(
+        job_id, [EventKind.verification_result], limit=EVENT_QUERY_CEILING
+    )
     return JobSnapshotResponse(
         job=job_to_response(job, progress_preview),
         logs=logs,
@@ -448,6 +490,7 @@ async def assemble_snapshot(
         steps=plan_steps,
         turn_summaries=turn_summaries,
         secondary_sessions=secondary_sessions,
+        verification_results=[VerificationResultResponse.model_validate(e.payload) for e in verification_events],
         context_handoffs=[
             ContextHandoffPayload(
                 job_id=job_id,

@@ -3,6 +3,8 @@ import { Tooltip } from "../ui/tooltip";
 import { type ScorecardResponse } from "../../api/client";
 import { Badge } from "../ui/badge";
 import { formatUsd, formatDuration } from "./helpers";
+import { sumKnown } from "../../lib/currency";
+import { CostEvidence } from "../CostEvidence";
 
 // ---------------------------------------------------------------------------
 // Budget card — adapts per SDK
@@ -10,15 +12,16 @@ import { formatUsd, formatDuration } from "./helpers";
 
 export function BudgetCard({ scorecard }: { scorecard: ScorecardResponse }) {
   const { budget, quotaJson, dailySpendLimitUsd, costTrend } = scorecard;
-  const totalCost = budget.reduce((s, b) => s + b.totalCostUsd, 0);
+  const totalCost = sumKnown(budget.map(b => b.totalCostUsd));
   const totalJobs = budget.reduce((s, b) => s + b.jobCount, 0);
-  const hasBudgetConfig = (scorecard.monthlyBudgetUsd > 0) || dailySpendLimitUsd > 0 || !!quotaJson;
+  const hasBudgetConfig = ((scorecard.monthlyBudgetUsd ?? -1) > 0) || (dailySpendLimitUsd ?? -1) > 0 || !!quotaJson;
   const periodLabel = scorecard.period === 1 ? "today" : `last ${scorecard.period} days`;
 
   // Today's spend from costTrend (last entry is today/most recent day)
-  const todaysCost = costTrend.length > 0 ? Number(costTrend[costTrend.length - 1]?.cost ?? 0) : 0;
+  const todaysCost = costTrend[costTrend.length - 1]?.cost;
   const dailyLimit = dailySpendLimitUsd || 0;
-  const dailyPct = dailyLimit > 0 ? (todaysCost / dailyLimit) * 100 : 0;
+  const dailyPct = dailyLimit > 0 && todaysCost != null ? (todaysCost / dailyLimit) * 100 : 0;
+  const monthlyPct = scorecard.pctMonthlyBudgetUsed ?? 0;
 
   let quotaInfo: { pct: number } | null = null;
   if (quotaJson) {
@@ -45,10 +48,11 @@ export function BudgetCard({ scorecard }: { scorecard: ScorecardResponse }) {
       </div>
 
       <div className="text-2xl font-semibold text-foreground">
-        <Tooltip content={`Total API-equivalent cost across ${totalJobs} job${totalJobs !== 1 ? "s" : ""} in the ${periodLabel}. For subscription plans (Claude Max, Copilot Pro), this reflects what the same usage would cost at API rates — not your subscription charge.`}>
+        <Tooltip content={`Verified source USD across ${totalJobs} jobs. Native units, estimates and unverified historical values are excluded.`}>
           <span className="cursor-help">{formatUsd(totalCost)}</span>
         </Tooltip>
       </div>
+      <CostEvidence usage={scorecard.costUsage} estimate={scorecard.estimatedCostUsd} />
 
       <div className="space-y-2">
         {budget.map((b) => (
@@ -58,12 +62,12 @@ export function BudgetCard({ scorecard }: { scorecard: ScorecardResponse }) {
               <span className="text-muted-foreground">{b.jobCount} jobs</span>
             </div>
             <div className="flex items-center gap-3">
-              {b.totalCostUsd > 0 || b.avgCostPerJob > 0 ? (
-                <Tooltip content={`${formatUsd(b.avgCostPerJob)} avg per job · ${formatDuration(b.avgDurationMs)} avg duration. For subscriptions this reflects API-equivalent usage, not your actual charge.`}>
+              {b.totalCostUsd != null ? (
+                <Tooltip content={`${formatUsd(b.avgCostPerJob)} verified source USD per job · ${formatDuration(b.avgDurationMs)} avg duration. Unknown costs and estimates are excluded.`}>
                   <span className="cursor-help text-foreground">{formatUsd(b.totalCostUsd)}</span>
                 </Tooltip>
               ) : (
-                <span className="text-muted-foreground italic">No usage data</span>
+                <span className="text-muted-foreground italic">No verified USD</span>
               )}
               {b.premiumRequests > 0 && (
                 <Tooltip content="Premium requests consumed from your Copilot entitlement this period">
@@ -129,24 +133,24 @@ export function BudgetCard({ scorecard }: { scorecard: ScorecardResponse }) {
         </div>
       )}
 
-      {scorecard.monthlyBudgetUsd > 0 && (
+      {(scorecard.monthlyBudgetUsd ?? -1) > 0 && (
         <div className="pt-2 border-t border-border">
           <div className="flex items-center justify-between text-xs mb-1">
             <span className="text-muted-foreground">Monthly Budget</span>
-            <span className={scorecard.pctMonthlyBudgetUsed > 0.8 ? "text-red-400 font-medium" : "text-foreground"}>
+            <span className={monthlyPct > 0.8 ? "text-red-400 font-medium" : "text-foreground"}>
               {formatUsd(scorecard.monthSpendUsd)} / {formatUsd(scorecard.monthlyBudgetUsd)}
             </span>
           </div>
           <div className="h-1.5 rounded-full bg-border overflow-hidden">
             <div
               className={`h-full rounded-full transition-all ${
-                scorecard.pctMonthlyBudgetUsed > 0.8
+                monthlyPct > 0.8
                   ? "bg-red-500"
-                  : scorecard.pctMonthlyBudgetUsed > 0.6
+                  : monthlyPct > 0.6
                   ? "bg-yellow-500"
                   : "bg-green-500"
               }`}
-              style={{ width: `${Math.min(scorecard.pctMonthlyBudgetUsed * 100, 100)}%` }}
+              style={{ width: `${Math.min(monthlyPct * 100, 100)}%` }}
             />
           </div>
           <div className="flex items-center justify-between text-[11px] text-muted-foreground mt-1">
@@ -155,7 +159,7 @@ export function BudgetCard({ scorecard }: { scorecard: ScorecardResponse }) {
               <span className="cursor-help">Proj: {formatUsd(scorecard.projectedMonthEndUsd)}</span>
             </Tooltip>
           </div>
-          {scorecard.pctMonthlyBudgetUsed > 0.8 && (
+          {monthlyPct > 0.8 && (
             <Tooltip content="Monthly agent spend is approaching your configured budget. Consider reducing job concurrency or pausing lower-priority work.">
             <div className="flex items-center gap-1 mt-1 text-[11px] text-red-400 cursor-help">
               <AlertTriangle size={11} />
@@ -163,7 +167,7 @@ export function BudgetCard({ scorecard }: { scorecard: ScorecardResponse }) {
             </div>
             </Tooltip>
           )}
-          {scorecard.projectedMonthEndUsd > scorecard.monthlyBudgetUsd && (
+          {scorecard.projectedMonthEndUsd != null && scorecard.projectedMonthEndUsd > scorecard.monthlyBudgetUsd && (
             <Tooltip content="Based on your average daily spend so far, you're on track to exceed your monthly budget. Projection = daily average × days in month.">
             <div className="flex items-center gap-1 mt-1 text-[11px] text-red-400 cursor-help">
               <AlertTriangle size={11} />

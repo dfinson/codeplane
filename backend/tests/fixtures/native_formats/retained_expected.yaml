@@ -1,0 +1,53 @@
+# Hand-authored semantic assertions for the verbatim selections in provenance.json.
+# Each list is the complete emitted kind sequence for that physical record.
+# Payload assertions here are a focused subset. shapes.yaml uses exact payloads.
+aider:
+  - [[llm.call.completed, {model: gpt-5, edit_format: diff, input_tokens: 3647, output_tokens: 36, total_tokens: 3683, cost: 0.00491875, total_cost: 0.00491875}]]
+aider_markdown:
+  - [[session.info, {version: "0.86.2"}]]
+  - [[session.info, {model: gpt-5, edit_format: diff}]]
+amazonq:
+  - [[message.user, {content: "Add a GET /tickets/{id} endpoint"}], [message.assistant, {content: Reading the routes file.}], [tool.call.started, {tool_call_id: tu1, tool_name: fs_read, arguments: {path: src/routes/tickets.py}}], [tool.call.completed, {tool_call_id: tu1, is_error: false, result: "# tickets routes"}], [message.assistant, {content: Endpoint added.}]]
+antigravity:
+  - [[session.info, {step_index: 12}]]
+  - [[task.completed, {content: "", structured_output: {endpoint: "GET /tickets/{ticket_id}", status: completed}, step_index: 14}]]
+claude:
+  - [[tool.call.started, {tool_call_id: toolu_01GvdDUzY4GoVNNNA4pbX9M4, tool_name: Glob, arguments: {pattern: "**/*.md"}}], [telemetry.usage, {model: claude-haiku-4-5-20251001, input_tokens: 8, output_tokens: 139, cache_read_tokens: 32033, cache_write_tokens: 549, msg_id: msg_01STLCUifcHZxQQno84iiCNu}]]
+cline:
+  - [[message.assistant, {content: Editing the routes file.}]]
+codex:
+  - [[tool.call.started, {tool_call_id: call_J7fULK2w5JrWVQsoBGQCnb6L, tool_name: shell_command, arguments: {command: 'Get-Content app\main.py -Raw'}}]]
+continue_dev:
+  - [[message.user, {content: "Add a GET /tickets/{id} endpoint"}], [llm.reasoning.chunk, {content: I should add a route and a test.}], [message.assistant, {content: Adding the endpoint now.}], [tool.call.started, {tool_call_id: tc1, tool_name: edit_file, arguments: {path: src/routes/tickets.py}}], [tool.call.completed, {tool_call_id: tc1, result: file updated}]]
+copilot:
+  - [[tool.call.started, {tool_call_id: toolu_01BM5c7aJiziTCzzM2fB9zeN, tool_name: view, arguments: {path: 'C:\Users\davidfinson\AppData\Local\Temp\cap_copilot_iztny7rl\demo-issue-tracker-api'}}]]
+copilot_markdown:
+  - [[message.assistant, {content: "Test summary:"}]]
+  - [[session.info, {level: 3, title: Summary}]]
+copilot_vscode:
+  - [[session.started, {session_id: fbb11045-6100-4db2-9823-4fa245273767, version: 3, responder: "", initial_location: panel}]]
+  - []
+  - []
+crewai:
+  - [[session.started, {crew_name: raw-trace-demo-issue-tracker-crew}]]
+goose:
+  - [[tool.call.started, {tool_name: tree, tool_call_id: call_Hoci83lVl7tytp4AUOtbgjY9, arguments: {path: .}}]]
+langgraph:
+  - [[tool.call.started, {tool_name: run_pytest, tool_call_id: 019f0d8a-224d-7e01-90ec-476bd087d120, arguments: {}}]]
+maf:
+  - [[file.read, {duration_ms: 0.0}]]
+maf_transcript:
+  - [[tool.call.started, {activity_id: 492a395b-e68b-41ea-bc60-ae9bd85731ce, input: {arguments: "{}", call_id: call_Hafec5Syaq8yGYBOjNyytrCG, id: fc_010d3d3c7546e0f4006a40e9cb68a481959bbd027f1737dfde, name: run_pytest, status: completed, type: function_call}}]]
+openai_agents:
+  - [[tool.call.started, {tool_name: read_file, tool_call_id: span_2b394a005d074adab2dd7840, arguments: '{"path":"tests/test_version.py"}'}], [tool.call.completed, {tool_name: read_file, tool_call_id: span_2b394a005d074adab2dd7840, result: "from app.version import VERSION\n\n\ndef test_version():\n    assert VERSION == \"1.0.0\"\n"}]]
+opencode:
+  - [[tool.call.started, {session_id: ses_0f26b3ee2ffe31ZjnzcRkv769m, message_id: msg_f0d95186e0010LglSHwYgu5Mk3, part_id: prt_f0d952297001cDH0tQmMkTyFe6, call_id: call_JBAFJfZcEHhO9nwOkg6hxpPq, tool: glob, input: {path: "", pattern: "**/*.py"}}]]
+openhands:
+  - [[command.started, {command: ls -la app, summary: List files in app directory, tool_call_id: call_zcJDAtKtn3Y7hj1rjgGvMqTt, source: agent}]]
+pydantic_ai:
+  - [[llm.output.chunk, {part_kind: tool-call}]]
+smolagents:
+  - [[session.started, {}]]
+  - [[message.assistant, {step_number: 1, input_tokens: 1394, output_tokens: 24}], [tool.call.started, {tool_name: list_dir, tool_call_id: call_VkjNAT6fTbZrMFYDL3GlMSth, arguments: {subpath: ""}}]]
+sweagent:
+  - [[tool.output, {content: [{text: "OBSERVATION:\nThe path /app does not exist. Please provide a valid path.\n", type: text}], tool_call_ids: [call_oqwK9SuriLqOYR3BuEJ9BHBu], agent: main, message_type: observation}]]

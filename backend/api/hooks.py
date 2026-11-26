@@ -31,6 +31,11 @@ async def claude_stop_hook(
     Claude displays to the agent.
     """
     body = await request.json()
+    from backend.config import load_config
+    from backend.services.adapters.integration_policy import IntegrationPolicy
+
+    if not IntegrationPolicy(load_config()).enabled("claude"):
+        return JSONResponse(status_code=403, content={"detail": "Claude integration is disabled by policy"})
     session_id = body.get("session_id", "")
 
     if not session_id:

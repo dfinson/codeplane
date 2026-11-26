@@ -56,7 +56,7 @@ export function useSSE(jobId?: string): { reconnect: () => void } {
       es = new EventSource(url);
 
       es.onopen = () => {
-        const wasReconnect = attemptRef.current > 0;
+        const wasReconnect = wasConnectedRef.current || attemptRef.current > 0;
         attemptRef.current = 0;
         wasConnectedRef.current = true;
         // Defer the Zustand update to a macrotask (setTimeout 0) rather than a
@@ -67,8 +67,12 @@ export function useSSE(jobId?: string): { reconnect: () => void } {
         // A macrotask guarantees react's current render+commit fully complete
         // before any store update is processed.
         setTimeout(() => {
+          if (disposed) return;
           setConnectionStatus("connected");
           setReconnectAttempt(0);
+          // A global reconnect, including the manual button, must recover
+          // persisted tracker outcomes outside the event replay window.
+          if (!jobId) void useStore.getState().refreshTrackerOperations();
         }, 0);
 
         // After a reconnect, hydrate the scoped job's full state so the UI
@@ -102,6 +106,7 @@ export function useSSE(jobId?: string): { reconnect: () => void } {
         "job.resolved",
         "job.archived",
         "job.title_updated",
+        "recipe.updated",
         "model.downgraded",
         "merge.completed",
         "merge.conflict",
@@ -114,6 +119,7 @@ export function useSSE(jobId?: string): { reconnect: () => void } {
         "llm.reasoning.chunk",
         "tool.call.started",
         "tool.call.completed",
+        "tool.call.failed",
         "tool.result.chunk",
         "sidecar.transcript",
         "sidecar.agent_message",
@@ -132,6 +138,7 @@ export function useSSE(jobId?: string): { reconnect: () => void } {
         "session.resumed",
         "telemetry.updated",
         "artifacts.updated",
+        "tracker.operation_updated",
         // Plan steps — the only step-level event the frontend handles
         "plan.step_updated",
         // Activity timeline

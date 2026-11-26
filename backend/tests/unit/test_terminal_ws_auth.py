@@ -17,11 +17,9 @@ from backend.services.auth.middleware import check_websocket_auth, set_password
 @pytest.fixture(autouse=True)
 def _reset_auth_state() -> Generator[None, None, None]:
     """Ensure each test starts with clean auth state."""
-    orig_hash = auth_mod._password_hash
-    orig_tokens = auth_mod._session_tokens.copy()
+    auth_mod._reset_for_testing()
     yield
-    auth_mod._password_hash = orig_hash
-    auth_mod._session_tokens = orig_tokens
+    auth_mod._reset_for_testing()
 
 
 class TestCheckWebsocketAuth:
@@ -30,6 +28,12 @@ class TestCheckWebsocketAuth:
     def test_no_password_configured_allows_anyone(self) -> None:
         auth_mod._password_hash = None
         assert check_websocket_auth(client_host="8.8.8.8", cookies={}) is True
+
+    @pytest.mark.parametrize("client_host", ["8.8.8.8", "127.0.0.1"])
+    def test_remote_posture_requires_auth_even_without_password(self, client_host: str) -> None:
+        auth_mod._password_hash = None
+        policy = auth_mod.AuthPolicy(remote=True)
+        assert check_websocket_auth(client_host=client_host, cookies={}, policy=policy) is False
 
     def test_password_enabled_rejects_remote_without_cookie(self) -> None:
         set_password("secret")

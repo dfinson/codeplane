@@ -4,9 +4,11 @@ import { spawn, spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import type { ProjectBoard, TaskLinkInspection } from "../src/api/types";
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:18765";
 const JIRA_TOKEN = "local-e2e-token";
@@ -291,7 +293,7 @@ test.beforeAll(async () => {
     }
     await assertPortAvailable(backendPort);
     const jiraBaseUrl = await startFakeJira();
-    codeplaneHome = await mkdtemp(resolve(repoRoot, ".tracker-e2e-"));
+    codeplaneHome = await mkdtemp(resolve(tmpdir(), "codeplane-tracker-e2e-"));
     memberRepoPath = resolve(codeplaneHome, "member-repo");
     addedRepoPath = resolve(codeplaneHome, "added-repo");
     await Promise.all([
@@ -320,6 +322,7 @@ test.beforeAll(async () => {
         env: {
           ...process.env,
           CODEPLANE_HOME: codeplaneHome,
+          CODEPLANE_E2E_FAKE_AGENT: "1",
           PYTHONIOENCODING: "utf-8",
           PYTHONUTF8: "1",
         },
@@ -452,8 +455,10 @@ test("retries provider refresh and assigns a tracker ticket through the UI", asy
   jiraFailureMode = true;
   await page.getByRole("button", { name: "Refresh TEST" }).click();
   await expect(
-    page.getByRole("alert").filter({ hasText: "Tracker provider request failed" }),
+    page.getByRole("alert").filter({ hasText: "Tracker provider read failed" }),
   ).toBeVisible();
+  await expect(page.getByText("Deterministic Jira ticket", { exact: true })).toBeVisible();
+  await expect(page.getByText("To Do", { exact: true })).toBeVisible();
 
   jiraFailureMode = false;
   jiraStatus = "In Progress";
@@ -483,10 +488,24 @@ test("starts the assigned TaskLink, preserves context, and returns through its c
   page,
 }) => {
   await page.goto(`${backendBaseUrl}/projects/id/${projectId}/board`);
-  const taskCard = page.getByLabel("Task recipe: TEST-1 — ready");
-  await expect(taskCard).toContainText("Tracker TEST-1");
-  await expect(taskCard).toContainText(trackerLinkId);
-  await expect(taskCard).toContainText("member-repo");
+  const taskCard = page.getByRole("article", { name: "Work item: TEST-1" });
+  await expect(taskCard).toContainText("Task TEST-1: ready");
+  await expect(taskCard.getByRole("link", { name: "Inspect task" })).toHaveAttribute(
+    "href", `/projects/id/${projectId}/board/task/${taskLinkId}`,
+  );
+  const inspectionResponsePromise = page.waitForResponse(
+    (response) => response.url().endsWith(`/api/settings/projects/${projectId}/task-links/${taskLinkId}`) &&
+      response.request().method() === "GET",
+  );
+  await taskCard.getByRole("link", { name: "Inspect task" }).click();
+  const inspectionResponse = await inspectionResponsePromise;
+  expect(inspectionResponse.ok()).toBe(true);
+  const inspection: TaskLinkInspection = await inspectionResponse.json();
+  expect(inspection.task).toMatchObject({
+    id: taskLinkId, projectId, state: "ready", trackerTicketRef: "TEST-1", trackerLinkId, repoPath: memberRepoPath,
+  });
+  const inspector = page.getByRole("region", { name: "Task inspector" });
+  await expect(inspector).toContainText("Implement TEST-1 from the synced Jira ticket");
 
   const startResponsePromise = page.waitForResponse(
     (response) =>
@@ -494,7 +513,7 @@ test("starts the assigned TaskLink, preserves context, and returns through its c
         `/api/settings/projects/${projectId}/task-links/${taskLinkId}/start`,
       ) && response.request().method() === "POST",
   );
-  await taskCard.getByRole("button", { name: "Start task" }).click();
+  await inspector.getByRole("button", { name: "Start inspected task" }).click();
   const startResponse = await startResponsePromise;
   expect(startResponse.status()).toBe(200);
   const started = (await startResponse.json()) as {
@@ -504,11 +523,28 @@ test("starts the assigned TaskLink, preserves context, and returns through its c
   expect(started.state).toBe("running");
   expect(started.jobId).toBeTruthy();
 
-  const linkedCard = page.getByRole("link", {
-    name: /Task recipe: TEST-1 — running/,
-  });
-  await expect(linkedCard).toContainText(started.jobId ?? "");
-  await linkedCard.click();
+  await expect(page).toHaveURL(`${backendBaseUrl}/jobs/${started.jobId}`);
+  const boardResponsePromise = page.waitForResponse(
+    (response) => response.url().endsWith(`/api/settings/projects/${projectId}/board`) &&
+      response.request().method() === "GET",
+  );
+  await page.goto(`${backendBaseUrl}/projects/id/${projectId}/board`);
+  const boardResponse = await boardResponsePromise;
+  expect(boardResponse.ok()).toBe(true);
+  const board: ProjectBoard = await boardResponse.json();
+  const cards = Object.values(board.columns).flatMap((column) => column.items);
+  expect(cards).toHaveLength(1);
+  expect(cards[0].job?.id).toBe(started.jobId);
+  expect(board.totals).toMatchObject({ taskCount: 1, linkedJobCount: 1, standaloneJobCount: 0 });
+  for (const column of ["ready_blocked", "in_progress", "needs_decision", "failed"] as const) {
+    expect(board.columns[column]!.items).toHaveLength(board.totals.workCounts[column]!);
+  }
+  const linkedCard = page.getByRole("article", { name: "Work item: TEST-1" });
+  await expect(linkedCard).toContainText("Task TEST-1: running");
+  await expect(linkedCard).toContainText(memberRepoPath);
+  const openJob = linkedCard.getByRole("link", { name: "Open Job", exact: true });
+  await expect(openJob).toHaveAttribute("href", `/jobs/${started.jobId}`);
+  await openJob.click();
   await expect(page).toHaveURL(`${backendBaseUrl}/jobs/${started.jobId}`);
 
   const breadcrumb = page.getByRole("navigation", { name: "Breadcrumb" });

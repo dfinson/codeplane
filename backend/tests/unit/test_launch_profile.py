@@ -83,6 +83,30 @@ def _remote_profile(**overrides: object) -> LaunchProfile:
     return build_active_launch_profile(**defaults)  # type: ignore[arg-type]
 
 
+class TestRuntimeContract:
+    def test_access_only_mode_survives_secret_free_roundtrip(self) -> None:
+        data = _remote_profile(provider="cloudflare").to_dict()
+        data["passwordSource"] = {"kind": "not_required"}
+        data["authMode"] = "access_only"
+        restored = LaunchProfile.from_dict(data).to_dict()
+        assert restored.get("authMode") == "access_only"
+        assert restored["passwordSource"] == {"kind": "not_required"}
+
+    def test_legacy_remote_profile_without_password_fails_closed(self) -> None:
+        data = _remote_profile().to_dict()
+        data["passwordSource"] = {"kind": "not_required"}
+        data.pop("authMode", None)
+        with pytest.raises(LaunchProfileInvalidError, match="auth|password"):
+            LaunchProfile.from_dict(data)
+
+    def test_access_only_rejects_non_cloudflare_profile(self) -> None:
+        data = _remote_profile().to_dict()
+        data["passwordSource"] = {"kind": "not_required"}
+        data["authMode"] = "access_only"
+        with pytest.raises(LaunchProfileInvalidError, match="Cloudflare|cloudflare"):
+            LaunchProfile.from_dict(data)
+
+
 class TestSecretSource:
     def test_not_required_roundtrip(self) -> None:
         source = SecretSource.not_required()
@@ -142,6 +166,7 @@ class TestLaunchProfileSchema:
             "tunnelOrigin",
             "tunnelOriginReusable",
             "passwordSource",
+            "authMode",
             "tunnelCredentialSource",
             "startedPid",
             "startedProcessTime",

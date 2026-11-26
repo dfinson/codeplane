@@ -8,12 +8,24 @@ from backend.models.api_schemas import (
     PeerMessageListResponse,
     PeerMessageRequest,
     PeerMessageResponse,
+    SessionAgentDirectoryResponse,
     SessionDirectoryResponse,
 )
 from backend.services.runtime import RuntimeService
 from backend.services.session_coordination import SessionCoordination
 
 router = APIRouter(prefix="/jobs", tags=["session-coordination"], route_class=DishkaRoute)
+
+
+@router.get("/{job_id}/peer-agents", response_model=SessionAgentDirectoryResponse)
+async def peer_agents(
+    job_id: str,
+    target_job_id: str,
+    sf: FromDishka[async_sessionmaker[AsyncSession]],
+    runtime: FromDishka[RuntimeService],
+    cursor: str = Query(default="", max_length=1024),
+) -> SessionAgentDirectoryResponse:
+    return await SessionCoordination(sf, runtime).agents(job_id, target_job_id, cursor)
 
 
 @router.get("/{job_id}/sessions", response_model=SessionDirectoryResponse)

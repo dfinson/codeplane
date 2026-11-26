@@ -1,0 +1,3 @@
+haystack-ai==3.0.0
+openai==2.38.0
+agent-governance-toolkit-core==5.0.0

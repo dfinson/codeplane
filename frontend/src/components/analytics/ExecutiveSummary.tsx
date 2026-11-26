@@ -13,14 +13,14 @@ interface Props {
 }
 
 export function ExecutiveSummary({ data }: Props) {
-  if (!data || data.totalUsd <= 0) {
+  if (!data || data.totalUsd == null) {
     return (
       <div className="rounded-lg border border-border bg-card p-4">
         <div className="flex items-center gap-2 text-muted-foreground text-xs font-medium uppercase tracking-wide">
           <PieChart size={14} />
           Executive Summary
         </div>
-        <p className="text-muted-foreground text-sm mt-2">No spend data yet.</p>
+        <p className="text-muted-foreground text-sm mt-2">Unknown USD. Native units and estimates are not verified spend.</p>
       </div>
     );
   }
@@ -94,29 +94,29 @@ export function ExecutiveSummary({ data }: Props) {
       </div>
 
       {/* Waste breakdown */}
-      {data.wastedUsd > 0 && data.wasteBreakdown && (
+      {(data.wastedUsd ?? -1) > 0 && data.wasteBreakdown && (
         <details className="text-xs">
           <summary className="cursor-pointer text-red-500 font-medium">Waste breakdown</summary>
           <div className="pl-4 mt-1 space-y-0.5 text-muted-foreground">
-            {data.wasteBreakdown.retryUsd > 0 && (
+            {(data.wasteBreakdown.retryUsd ?? -1) > 0 && (
               <div className="flex justify-between">
                 <span>Retries</span>
                 <span>{formatUsd(data.wasteBreakdown.retryUsd)}</span>
               </div>
             )}
-            {data.wasteBreakdown.failedJobsUsd > 0 && (
+            {(data.wasteBreakdown.failedJobsUsd ?? -1) > 0 && (
               <div className="flex justify-between">
                 <span>Failed/discarded jobs</span>
                 <span>{formatUsd(data.wasteBreakdown.failedJobsUsd)}</span>
               </div>
             )}
-            {data.wasteBreakdown.compactionUsd > 0 && (
+            {(data.wasteBreakdown.compactionUsd ?? -1) > 0 && (
               <div className="flex justify-between">
                 <span>Compaction overhead</span>
                 <span>{formatUsd(data.wasteBreakdown.compactionUsd)}</span>
               </div>
             )}
-            {data.wasteBreakdown.rereadsUsd > 0 && (
+            {(data.wasteBreakdown.rereadsUsd ?? -1) > 0 && (
               <div className="flex justify-between">
                 <span>File re-reads</span>
                 <span>{formatUsd(data.wasteBreakdown.rereadsUsd)}</span>

@@ -134,7 +134,10 @@ class TestCostAttributionRepository:
         rows = await repo.for_job("job-1")
         assert len(rows) == 1
         assert rows[0]["bucket"] == "code_reading"
-        assert rows[0]["cost_usd"] == 1.5
+        assert rows[0]["cost_usd"] is None
+        assert rows[0]["input_tokens"] == 100
+        assert rows[0]["output_tokens"] == 50
+        assert rows[0]["call_count"] == 3
 
     @pytest.mark.asyncio
     async def test_delete_for_job(self, session: AsyncSession) -> None:
@@ -186,9 +189,18 @@ class TestCostAttributionRepository:
     async def test_by_dimension(self, session: AsyncSession) -> None:
         await _seed_job(session)
         await _seed_telemetry(session)
+        await session.execute(
+            text("UPDATE job_telemetry_summary SET derived_currency_qualified = 1 WHERE job_id = 'job-1'")
+        )
         repo = CostAttributionRepository(session)
-        await repo.insert(job_id="job-1", dimension="activity", bucket="reasoning", cost_usd=3.0, call_count=10)
-        await repo.insert(job_id="job-1", dimension="activity", bucket="code_reading", cost_usd=1.0, call_count=5)
+        await repo.insert_batch(
+            job_id="job-1",
+            currency_qualified=True,
+            rows=[
+                {"dimension": "activity", "bucket": "reasoning", "cost_usd": 3.0, "call_count": 10},
+                {"dimension": "activity", "bucket": "code_reading", "cost_usd": 1.0, "call_count": 5},
+            ],
+        )
         await session.commit()
 
         agg = await repo.by_dimension("activity")

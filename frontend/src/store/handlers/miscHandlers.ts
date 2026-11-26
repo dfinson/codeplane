@@ -3,13 +3,60 @@
  */
 
 import type { JobSummary, ApprovalRequest, TranscriptEntry, ConnectionStatus, ContextHandoff } from "../types";
-import type { DiffFileModel } from "../../api/types";
+import type { DiffFileModel, TrackerOperationResponse } from "../../api/types";
 import type { SSEHandler, AppState } from "./types";
 import { enrichJob } from "./jobHandlers";
 
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
+
+const trackerCorrelations = [
+  ["projectId", "projectRef"],
+  ["jobId", "jobRef"],
+  ["taskLinkId", "taskLinkRef"],
+  ["trackerLinkId", "trackerLinkRef"],
+  ["approvalId", "approvalRef"],
+] as const;
+
+/** FK deletion can null a live correlation without advancing operation version. */
+export function mergeTrackerOperations(
+  current: AppState["trackerOperations"],
+  incoming: TrackerOperationResponse[],
+): AppState["trackerOperations"] {
+  let next = current;
+  for (const operation of incoming) {
+    if (!operation || typeof operation.id !== "string" ||
+        typeof operation.projectRef !== "string" || typeof operation.version !== "number" ||
+        !Number.isSafeInteger(operation.version) || operation.version < 0) continue;
+    const previous = next[operation.id];
+    if (previous && (previous.projectRef !== operation.projectRef ||
+        (typeof previous.version === "number" && previous.version > operation.version))) continue;
+    let merged = previous && previous.version === operation.version ? previous : operation;
+    if (previous) {
+      for (const [liveKey, refKey] of trackerCorrelations) {
+        const reference = previous[refKey];
+        // A null approvalId without an approvalRef is not a deletion: the
+        // canonical approval can still be provisioned by a newer version.
+        if (reference == null || reference !== operation[refKey]) continue;
+        if ((previous[liveKey] === null || operation[liveKey] === null) && merged[liveKey] !== null) {
+          merged = { ...merged, [liveKey]: null };
+        }
+      }
+    }
+    if (merged === previous) continue;
+    if (next === current) next = { ...current };
+    next[operation.id] = merged;
+  }
+  return next;
+}
+
+export function handleTrackerOperationUpdated(state: AppState, payload: Record<string, unknown>): Partial<AppState> | null {
+  const operation = payload.operation as TrackerOperationResponse | undefined;
+  if (!operation) return null;
+  const trackerOperations = mergeTrackerOperations(state.trackerOperations, [operation]);
+  return trackerOperations === state.trackerOperations ? null : { trackerOperations };
+}
 
 export function handleSnapshot(_state: AppState, payload: Record<string, unknown>): Partial<AppState> | null {
   const jobs = (payload.jobs as JobSummary[]) ?? [];
@@ -116,7 +163,11 @@ export function handleTelemetryUpdated(state: AppState, payload: Record<string, 
       ...state.jobs,
       [jobId]: {
         ...existingJob,
-        ...(payload.totalCostUsd !== undefined ? { totalCostUsd: payload.totalCostUsd as number } : {}),
+        // A legacy aggregate update cannot re-certify the previously loaded typed totals.
+        ...(payload.totalCostUsd !== undefined ? {
+          totalCostUsd: payload.totalCostUsd as number,
+          ...(payload.totalCostUsd !== existingJob.totalCostUsd ? { costUsage: null } : {}),
+        } : {}),
         ...(payload.totalTokens !== undefined ? { totalTokens: payload.totalTokens as number } : {}),
         ...(payload.inputTokens !== undefined ? { inputTokens: payload.inputTokens as number } : {}),
         ...(payload.outputTokens !== undefined ? { outputTokens: payload.outputTokens as number } : {}),
@@ -169,6 +220,7 @@ export function handleContextHandoff(state: AppState, payload: Record<string, un
 }
 
 export const miscHandlers: Record<string, SSEHandler> = {
+  "tracker.operation_updated": handleTrackerOperationUpdated,
   snapshot: handleSnapshot,
   "session.heartbeat": handleSessionHeartbeat,
   "diff.updated": handleDiffUpdate,

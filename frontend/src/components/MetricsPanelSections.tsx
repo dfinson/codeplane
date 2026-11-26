@@ -8,6 +8,7 @@ import { Progress } from "./ui/progress";
 import { Tooltip } from "./ui/tooltip";
 import { cn } from "../lib/utils";
 import { useStore } from "../store";
+import { sumKnown } from "../lib/currency";
 import type {
   TelemetryData, FileAccessData, LLMCall, SortField, SortDir, SidecarSession,
 } from "./MetricsPanelTypes";
@@ -66,7 +67,7 @@ export function CacheEfficiencyBar({ inputTokens, cacheReadTokens, pricing, outp
   cacheReadTokens: number;
   pricing?: ModelPricing | null;
   outputTokens?: number;
-  actualCost?: number;
+  actualCost?: number | null;
 }) {
   const totalInput = inputTokens + cacheReadTokens;
   const rate = totalInput > 0 ? (cacheReadTokens / totalInput) * 100 : 0;
@@ -76,7 +77,7 @@ export function CacheEfficiencyBar({ inputTokens, cacheReadTokens, pricing, outp
   let savingsText: string | undefined;
   if (pricing && cacheReadTokens > 0) {
     const fullCost = estimateCostWithoutCache(pricing, inputTokens, outputTokens ?? 0, cacheReadTokens);
-    if (actualCost != null && actualCost > 0) {
+    if (actualCost != null && (actualCost ?? -1) > 0) {
       const saved = fullCost - actualCost;
       if (saved > 0) {
         const pct = (saved / fullCost) * 100;
@@ -134,7 +135,7 @@ export const SDK_COST_CONFIG: Record<string, SdkCostConfig> = {
     CostView: CopilotCostView,
     llmStatLabel: "LLM Calls",
     llmStatValue: (data) => String(data.llmCallCount ?? 0),
-    costTooltip: "API-equivalent cost — your actual charge is through your Copilot subscription",
+    costTooltip: "Verified USD only. Copilot native cost units are reported separately and are not converted.",
     showTurnsColumn: false,
   },
   claude: {
@@ -143,7 +144,7 @@ export const SDK_COST_CONFIG: Record<string, SdkCostConfig> = {
     CostView: ClaudeCostView,
     llmStatLabel: "Turns",
     llmStatValue: (data) => String(data.agentMessages ?? 0),
-    costTooltip: "API-equivalent cost — if using Claude Max, this reflects usage value, not your subscription charge",
+    costTooltip: "Source-verified USD, not an inferred subscription charge. Estimates are reported separately.",
     showTurnsColumn: true,
   },
 };
@@ -153,7 +154,7 @@ export const DEFAULT_COST_CONFIG: Omit<SdkCostConfig, "CostView"> = {
   icon: <BarChart3 size={12} className="text-green-400" />,
   llmStatLabel: "LLM Calls",
   llmStatValue: (data) => String(data.llmCallCount ?? 0),
-  costTooltip: "Total API-equivalent cost for this job",
+  costTooltip: "Source-verified USD for this job; unknown and estimated costs are excluded.",
   showTurnsColumn: false,
 };
 
@@ -247,14 +248,14 @@ function CopilotCostView({ data }: { data: TelemetryData }) {
 }
 
 function ClaudeCostView({ data }: { data: TelemetryData }) {
-  const totalCost = data.totalCost ?? 0;
+  const totalCost = data.totalCost;
   const pricing = useModelPricing(data.model);
 
   return (
     <div className="space-y-2">
       <div className="flex items-baseline justify-between text-xs">
         <span className="text-muted-foreground">Total API cost</span>
-        <span className={cn("font-semibold tabular-nums", totalCost > 5 ? "text-red-400" : totalCost > 1 ? "text-yellow-400" : "text-green-400")}>
+        <span className={cn("font-semibold tabular-nums", (totalCost ?? -1) > 5 ? "text-red-400" : (totalCost ?? -1) > 1 ? "text-yellow-400" : "text-green-400")}>
           {formatUsd(totalCost)}
         </span>
       </div>
@@ -266,7 +267,7 @@ function ClaudeCostView({ data }: { data: TelemetryData }) {
         </p>
       )}
 
-      {totalCost === 0 && (
+      {totalCost == null && (
         <p className="text-xs text-muted-foreground italic">Cost data available after session completes.</p>
       )}
 
@@ -393,7 +394,7 @@ export function SidecarSessionsSection({ sessions }: { sessions: SidecarSession[
 
   if (!sessions || sessions.length === 0) return null;
 
-  const totalCost = sessions.reduce((s, r) => s + r.totalCostUsd, 0);
+  const totalCost = sumKnown(sessions.map(r => r.totalCostUsd));
   const totalCalls = sessions.reduce((s, r) => s + r.llmCallCount, 0);
   const totalTokens = sessions.reduce((s, r) => s + r.inputTokens + r.outputTokens, 0);
 
@@ -410,7 +411,7 @@ export function SidecarSessionsSection({ sessions }: { sessions: SidecarSession[
           <span>{sessions.length} types</span>
           <span>{totalCalls} calls</span>
           {totalTokens > 0 && <span>{formatTokens(totalTokens)} tok</span>}
-          {totalCost > 0 && <span className="text-green-400">{formatUsd(totalCost)}</span>}
+          <span className="text-green-400">{formatUsd(totalCost)}</span>
         </span>
       </button>
       {expanded && (
@@ -436,7 +437,7 @@ export function SidecarSessionsSection({ sessions }: { sessions: SidecarSession[
                 <td className="px-3 py-1.5 text-right tabular-nums">{formatTokens(s.inputTokens)}</td>
                 <td className="px-3 py-1.5 text-right tabular-nums">{formatTokens(s.outputTokens)}</td>
                 <td className="px-3 py-1.5 text-right tabular-nums text-green-400">
-                  {s.totalCostUsd > 0 ? formatUsd(s.totalCostUsd) : "—"}
+                  {formatUsd(s.totalCostUsd)}
                 </td>
               </tr>
             ))}
@@ -484,7 +485,7 @@ export function SidecarSessionJobMetrics({ jobId }: { jobId: string }) {
         <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground tabular-nums">
           <span>{jobMetrics.callCount} calls</span>
           {hasTokens && <span>{formatTokens(jobMetrics.inputTokens + jobMetrics.outputTokens)} tok</span>}
-          {jobMetrics.costUsd > 0 && <span className="text-green-400">{formatUsd(jobMetrics.costUsd)}</span>}
+          {(jobMetrics.costUsd ?? -1) > 0 && <span className="text-green-400">{formatUsd(jobMetrics.costUsd)}</span>}
           <span className={latencyColor}>{formatDuration(jobMetrics.avgLatencyMs)} avg</span>
           <span>{formatDuration(jobMetrics.totalLatencyMs)}</span>
         </span>
@@ -496,7 +497,7 @@ export function SidecarSessionJobMetrics({ jobId }: { jobId: string }) {
           <CompactStat label="Total Time" value={formatDuration(jobMetrics.totalLatencyMs)} />
           {hasTokens && <CompactStat label="Input" value={formatTokens(jobMetrics.inputTokens)} />}
           {hasTokens && <CompactStat label="Output" value={formatTokens(jobMetrics.outputTokens)} />}
-          {jobMetrics.costUsd > 0 && <CompactStat label="Cost" value={formatUsd(jobMetrics.costUsd)} />}
+          {(jobMetrics.costUsd ?? -1) > 0 && <CompactStat label="Cost" value={formatUsd(jobMetrics.costUsd)} />}
         </div>
       )}
     </div>
@@ -533,7 +534,7 @@ export function CompactStat({ label, value, warn = false }: { label: string; val
 // ---------------------------------------------------------------------------
 
 export function SubAgentGroup({ group }: {
-  group: { model: string; count: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cost: number; durationMs: number; calls: LLMCall[] };
+  group: { model: string; count: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cost: number | null; durationMs: number; calls: LLMCall[] };
 }) {
   const [expanded, setExpanded] = useState(false);
   return (
@@ -549,7 +550,7 @@ export function SubAgentGroup({ group }: {
           <span>{formatTokens(group.inputTokens)} in</span>
           <span>{formatTokens(group.outputTokens)} out</span>
           {group.cacheReadTokens > 0 && <span>{formatTokens(group.cacheReadTokens)} cache</span>}
-          {group.cost > 0 && <span className="text-green-400">{formatUsd(group.cost)}</span>}
+          <span className="text-green-400">{formatUsd(group.cost)}</span>
           <span>{formatDuration(group.durationMs)}</span>
         </span>
       </button>

@@ -3,8 +3,8 @@
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-install: ## Install backend and frontend dependencies
-	uv sync
+install: ## Install contributor dependencies
+	uv sync --locked
 	cd frontend && npm ci
 
 lint: ## Run linters (ruff + eslint)

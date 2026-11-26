@@ -37,11 +37,11 @@ class TestListCredentials:
 
 class TestProviderGuidance:
     @pytest.mark.asyncio
-    async def test_returns_guidance_for_supported_providers(self, client: AsyncClient) -> None:
+    async def test_returns_guidance_for_registered_providers(self, client: AsyncClient) -> None:
         resp = await client.get("/api/settings/credentials/guidance")
         assert resp.status_code == 200
         guidance = resp.json()["guidance"]
-        assert set(guidance) == {"github", "jira", "azure_devops", "copilot"}
+        assert set(guidance) == {"github", "jira", "azure_devops", "otlp", "copilot"}
         for text in guidance.values():
             assert isinstance(text, str)
             assert text
@@ -89,7 +89,7 @@ class TestProviderGuidance:
         """Story 3.5 AC3/NFR3: the create-Credential schema is PAT-only."""
         field_names = set(CreateCredentialRequest.model_fields)
         assert not any("oauth" in name.lower() for name in field_names)
-        assert field_names == {"provider", "label", "base_url", "pat", "email"}
+        assert field_names == {"provider", "label", "base_url", "pat", "email", "export_protocol"}
 
 
 class TestCreateCredential:

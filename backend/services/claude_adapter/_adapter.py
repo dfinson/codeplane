@@ -13,12 +13,14 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from backend.models.events import EventKind
-from backend.services.adapters.agent_adapter import CODEPLANE_SYSTEM_PROMPT, CompletionResult
+from backend.models.usage import UsageAmount
+from backend.services.adapters.agent_adapter import CODEPLANE_SYSTEM_PROMPT, CompletionResult, UtilityCompletionError
 from backend.services.adapters.base_adapter import (
     COMPLETION_TIMEOUT_S,
     BaseAgentAdapter,
     PermissionDecision,
 )
+from backend.services.adapters.completion_context import current_completion_context, validate_completion_identity
 from backend.services.auth.permission_policy import PermissionRequest
 from backend.services.claude_adapter._helpers import (
     _kill_sdk_subprocess,
@@ -27,6 +29,7 @@ from backend.services.claude_adapter._helpers import (
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from claude_code_sdk.types import HookContext, HookJSONOutput
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from backend.models.domain import SessionConfig
@@ -67,10 +70,10 @@ class ClaudeAdapter(BaseAgentAdapter):
         # Stderr capture files for debugging failed sessions
         self._stderr_files: dict[str, str] = {}
         self._stderr_file_objects: dict[str, Any] = {}  # session_id → open file
-        # Tool-call buffer: tool_use_id -> {job_id, tool_name, arguments, start}
+        # Tool-call buffer: (session_id, tool_use_id) -> invocation context
         # Populated on ToolUseBlock, drained on ToolResultBlock to compute
         # duration_ms and carry start-time context (re-homed from EventPipeline).
-        self._tool_buf: dict[str, dict[str, Any]] = {}
+        self._tool_buf: dict[tuple[str, str], dict[str, Any]] = {}
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -91,12 +94,12 @@ class ClaudeAdapter(BaseAgentAdapter):
         # Claude-specific model tracking
         job_id = self._session_to_job.get(session_id)
         self._scout_models.pop(session_id, None)
-        if job_id and self.get_session_kind(session_id) != "preflight":
-            self._requested_models.pop(job_id, None)
-            self._model_verified.pop(job_id, None)
+        self._requested_models.pop(session_id, None)
+        self._model_verified.pop(session_id, None)
+        if job_id and not any(sid != session_id and owner == job_id for sid, owner in self._session_to_job.items()):
             self._log_seqs.pop(job_id, None)
-            for cid in [c for c, v in self._tool_buf.items() if v.get("job_id") == job_id]:
-                self._tool_buf.pop(cid, None)
+        for key in [key for key in self._tool_buf if key[0] == session_id]:
+            self._tool_buf.pop(key, None)
         super()._cleanup_session_state(session_id)
 
     def _read_session_stderr(self, session_id: str) -> str:
@@ -141,10 +144,29 @@ class ClaudeAdapter(BaseAgentAdapter):
             input_data: dict[str, Any],
             context: object,
         ) -> PermissionResultAllow | PermissionResultDeny:
-            job_id = self._session_to_job.get(session_id)
+            fence = self._capture_permission_fence(session_id)
+            if not self._permission_fence_is_current(session_id, fence):
+                return PermissionResultDeny(message="Tool callback no longer owns the current execution")
+            job_id = fence[0]
             tool_kind = _claude_tool_kind.get(tool_name, "custom-tool")
             full_cmd = str(input_data.get("command", "")) if tool_name == "Bash" else None
             file_name = str(input_data.get("file_path", "") or input_data.get("path", "")) or None
+            from backend.services.adapters.capability_guard import enforce_tool_capabilities
+            from backend.services.adapters.contracts import CapabilityDeniedError
+
+            try:
+                await enforce_tool_capabilities(
+                    config.execution_capabilities,
+                    workspace=config.workspace_path,
+                    kind=tool_kind,
+                    tool_name=tool_name,
+                    paths=[file_name] if file_name else (),
+                    command=full_cmd,
+                    dialect="bash" if tool_name == "Bash" else None,
+                )
+            except CapabilityDeniedError as exc:
+                log.warning("execution_capability_denied", job_id=job_id, reason=str(exc))
+                return PermissionResultDeny(message=str(exc))
             if config.session_kind == "preflight":
                 from backend.services.tools.preflight_curator import scout_read_allowed
 
@@ -171,6 +193,8 @@ class ClaudeAdapter(BaseAgentAdapter):
                 ),
                 tool_name=tool_name,
                 tool_input=input_data,
+                fence=fence,
+                dialect="bash" if tool_name == "Bash" else None,
             )
             if decision == PermissionDecision.allow:
                 return PermissionResultAllow()
@@ -214,13 +238,17 @@ class ClaudeAdapter(BaseAgentAdapter):
                         try:
                             if isinstance(message, SystemMessage):
                                 job_id = self._session_to_job.get(session_id)
+                                metadata = self._session_metadata.get(session_id)
                                 if job_id and self.get_session_kind(session_id) != "preflight":
-                                    self._emit_tf(
-                                        session_id,
-                                        job_id,
-                                        EventKind.message_assistant,
-                                        {"content": "Claude session initialized"},
-                                    )
+                                    if metadata is not None and metadata.attempt_id is not None:
+                                        self._emit_log_line(session_id, job_id, "Claude session initialized")
+                                    else:
+                                        self._emit_tf(
+                                            session_id,
+                                            job_id,
+                                            EventKind.message_assistant,
+                                            {"content": "Claude session initialized"},
+                                        )
 
                             elif isinstance(message, AssistantMessage):
                                 await self._process_assistant_message(session_id, message)
@@ -337,21 +365,27 @@ class ClaudeAdapter(BaseAgentAdapter):
         content_blocks = getattr(message, "content", []) or []
         model = getattr(message, "model", "") or ""
         job_id = self._session_to_job.get(session_id)
+        metadata = self._session_metadata.get(session_id)
+        is_attempt = metadata is not None and metadata.attempt_id is not None
         is_scout = self.get_session_kind(session_id) == "preflight"
-
-        # Lock in the main model from the first AssistantMessage that carries one
         if is_scout and model:
             self._scout_models[session_id] = model
-        elif job_id and model:
-            requested = self._requested_models.get(job_id, "")
-            if not self._model_verified.get(job_id):
-                self._model_verified[job_id] = True
+            if not is_attempt:
+                self._session_models[session_id] = model
+
+        # Lock in the main model from the first AssistantMessage that carries one
+        if job_id and model and (self.get_session_kind(session_id) != "preflight" or is_attempt):
+            requested = self._requested_models.get(session_id, "")
+            if not getattr(message, "parent_tool_use_id", None) and (
+                is_attempt or not self._model_verified.get(session_id)
+            ):
+                self._model_verified[session_id] = True
                 self._verify_and_set_model(session_id, job_id, model, requested)
 
         if not job_id:
             return
 
-        if is_scout:
+        if is_scout or is_attempt:
             texts = [block.text or "" for block in content_blocks if isinstance(block, TextBlock)]
             has_tool_requests = any(isinstance(block, ToolUseBlock) for block in content_blocks)
             if texts or has_tool_requests:
@@ -363,7 +397,7 @@ class ClaudeAdapter(BaseAgentAdapter):
                 )
         for block in content_blocks:
             if isinstance(block, TextBlock):
-                if is_scout:
+                if is_scout or is_attempt:
                     continue
                 text = block.text or ""
                 if not text.strip():
@@ -397,7 +431,7 @@ class ClaudeAdapter(BaseAgentAdapter):
         if not job_id:
             return
 
-        self._tool_buf[tool_id] = {
+        self._tool_buf[session_id, tool_id] = {
             "job_id": job_id,
             "tool_name": tool_name,
             "arguments": arguments,
@@ -431,7 +465,7 @@ class ClaudeAdapter(BaseAgentAdapter):
         if not job_id:
             return
 
-        buffered = self._tool_buf.pop(tool_use_id, {})
+        buffered = self._tool_buf.pop((session_id, tool_use_id), {})
         resolved_name = str(buffered.get("tool_name", "tool"))
 
         # Correct false failures for file-edit tools
@@ -465,7 +499,7 @@ class ClaudeAdapter(BaseAgentAdapter):
         """Handle the final ResultMessage — extract cost/usage and emit done."""
         job_id = self._session_to_job.get(session_id)
         result_text = getattr(message, "result", "") or ""
-        total_cost_usd = getattr(message, "total_cost_usd", 0.0) or 0.0
+        total_cost_usd = getattr(message, "total_cost_usd", None)
         usage = getattr(message, "usage", {}) or {}
         duration_ms = getattr(message, "duration_ms", 0) or 0
         is_error = getattr(message, "is_error", False)
@@ -476,11 +510,7 @@ class ClaudeAdapter(BaseAgentAdapter):
         cache_write = usage.get("cache_creation_input_tokens", 0) if isinstance(usage, dict) else 0
 
         if job_id:
-            model = (
-                self._scout_models.get(session_id, "")
-                if self.get_session_kind(session_id) == "preflight"
-                else self._job_main_models.get(job_id, "")
-            )
+            model = self._session_models.get(session_id, "")
             num_turns = getattr(message, "num_turns", 0) or 1
 
             self._emit_tf(
@@ -493,11 +523,27 @@ class ClaudeAdapter(BaseAgentAdapter):
                     "output_tokens": int(output_tokens),
                     "cache_read_tokens": int(cache_read),
                     "cache_write_tokens": int(cache_write),
-                    "cost_usd": float(total_cost_usd),
+                    "cost_usd": float(total_cost_usd) if total_cost_usd is not None else None,
                     "duration_ms": float(duration_ms),
                     "is_subagent": False,
                     "advance_turn": True,
                     "num_turns": int(num_turns),
+                    "native_usage": self._native_usage(
+                        session_id,
+                        {
+                            "input_tokens": usage.get("input_tokens") if isinstance(usage, dict) else None,
+                            "output_tokens": usage.get("output_tokens") if isinstance(usage, dict) else None,
+                            "cache_read_tokens": usage.get("cache_read_input_tokens")
+                            if isinstance(usage, dict)
+                            else None,
+                            "cache_write_tokens": (
+                                usage.get("cache_creation_input_tokens") if isinstance(usage, dict) else None
+                            ),
+                            "USD": getattr(message, "total_cost_usd", None),
+                        },
+                        "sdk.result",
+                        model=model or None,
+                    ),
                 },
             )
 
@@ -523,8 +569,14 @@ class ClaudeAdapter(BaseAgentAdapter):
                 EventKind.session_ended,
                 {"result": getattr(message, "result", None)},
             )
-        # On success no explicit event is emitted; the ``done=True`` break in
-        # ``_consume_messages`` triggers the queue sentinel that ends the stream.
+        elif (metadata := self._session_metadata.get(session_id)) is not None and metadata.attempt_id is not None:
+            self._emit_tf(
+                session_id,
+                job_id or session_id,
+                EventKind.session_ended,
+                {"result": getattr(message, "result", None)},
+            )
+        # Legacy sessions still end through the queue sentinel.
 
     async def _process_stream_event(
         self,
@@ -588,16 +640,19 @@ class ClaudeAdapter(BaseAgentAdapter):
     async def create_session(self, config: SessionConfig) -> str:
         from claude_code_sdk import ClaudeCodeOptions, ClaudeSDKClient
 
+        from backend.services.action_policy.session_policy import SessionPolicy
+
         session_id = str(uuid.uuid4())
         queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue()
         self._queues[session_id] = queue
+        self.set_session_metadata(session_id, config)
 
         if config.job_id:
             self.set_job_id(session_id, config.job_id)
             if config.session_kind == "preflight":
                 self._scout_models[session_id] = config.model or ""
-            elif config.model:
-                self._requested_models[config.job_id] = config.model
+            if config.model:
+                self._requested_models[session_id] = config.model
         if config.session_kind != "job":
             self.set_session_kind(session_id, config.session_kind)
 
@@ -630,8 +685,73 @@ class ClaudeAdapter(BaseAgentAdapter):
         # Session-level constraints
         if config.max_turns is not None:
             options.max_turns = config.max_turns
-        if config.disallowed_tools:
-            options.disallowed_tools = list(config.disallowed_tools)
+        from backend.services.adapters.capability_guard import excluded_tools_for_capabilities
+
+        excluded_tools = excluded_tools_for_capabilities(config.execution_capabilities, config.disallowed_tools)
+        if excluded_tools:
+            options.disallowed_tools = excluded_tools
+        standalone = isinstance(self._policy_router.get(config.job_id), SessionPolicy)
+        if config.execution_capabilities is not None or standalone:
+            from claude_code_sdk import HookMatcher
+
+            async def _guard_invocation(
+                request: dict[str, Any], tool_use_id: str | None, context: HookContext
+            ) -> HookJSONOutput:
+                from backend.services.adapters.capability_guard import (
+                    enforce_tool_capabilities,
+                    invocation_permission_request,
+                )
+                from backend.services.adapters.contracts import CapabilityDeniedError
+
+                fence = self._capture_permission_fence(session_id)
+                try:
+                    if not self._permission_fence_is_current(session_id, fence):
+                        raise CapabilityDeniedError("Tool callback no longer owns the current execution")
+                    tool_name = request.get("tool_name")
+                    arguments = request.get("tool_input")
+                    if not isinstance(tool_name, str) or not isinstance(arguments, dict):
+                        raise CapabilityDeniedError("Tool invocation is unavailable for capability enforcement")
+                    permission_request = invocation_permission_request(config.workspace_path, tool_name, arguments)
+                    await enforce_tool_capabilities(
+                        config.execution_capabilities,
+                        workspace=config.workspace_path,
+                        kind=permission_request.kind,
+                        tool_name=tool_name,
+                        paths=permission_request.possible_paths or (),
+                        command=permission_request.full_command_text,
+                        dialect="bash" if tool_name == "Bash" else None,
+                    )
+                    if not self._permission_fence_is_current(session_id, fence):
+                        raise CapabilityDeniedError("Tool callback no longer owns the current execution")
+                    if isinstance(self._policy_router.get(config.job_id), SessionPolicy):
+                        decision = await self._evaluate_permission(
+                            session_id,
+                            config.job_id,
+                            permission_request,
+                            tool_name=tool_name,
+                            tool_input=arguments,
+                            fence=fence,
+                            tool_call_id=tool_use_id,
+                            dialect="bash" if tool_name == "Bash" else None,
+                        )
+                        return {
+                            "hookSpecificOutput": {
+                                "hookEventName": "PreToolUse",
+                                "permissionDecision": "allow" if decision == PermissionDecision.allow else "deny",
+                            }
+                        }
+                except CapabilityDeniedError as exc:
+                    log.warning("execution_capability_denied", job_id=config.job_id, reason=str(exc))
+                    return {
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": str(exc),
+                        }
+                    }
+                return {}
+
+            options.hooks = {"PreToolUse": [HookMatcher(hooks=[_guard_invocation])]}
 
         # MCP servers from CodePlane config
         mcp_config: dict[str, Any] = {}
@@ -657,12 +777,16 @@ class ClaudeAdapter(BaseAgentAdapter):
         # when can_use_tool is set (streaming mode).
         client = None
         try:
-            try:
-                client = ClaudeSDKClient(options)
-                await client.connect(_prompt_to_stream(config.prompt))
-            except Exception:
-                if not options.resume:
-                    raise
+            client = ClaudeSDKClient(options)
+            await client.connect(None if config.defer_start else _prompt_to_stream(config.prompt))
+        except asyncio.CancelledError:
+            _kill_sdk_subprocess(client)
+            self._cleanup_session(session_id)
+            raise
+        except Exception:
+            _kill_sdk_subprocess(client)
+            if options.resume:
+                # Resume failed — fall back to a fresh session (mirrors CopilotAdapter behaviour)
                 log.warning(
                     "claude_session_resume_failed_creating_new",
                     resume_id=options.resume,
@@ -670,13 +794,22 @@ class ClaudeAdapter(BaseAgentAdapter):
                 )
                 _kill_sdk_subprocess(client)
                 options.resume = None
-                client = ClaudeSDKClient(options)
-                await client.connect(_prompt_to_stream(config.prompt))
-        except BaseException:
-            log.error("claude_session_create_failed", exc_info=True)
-            _kill_sdk_subprocess(client)
-            self._cleanup_session(session_id)
-            raise
+                try:
+                    client = ClaudeSDKClient(options)
+                    await client.connect(None if config.defer_start else _prompt_to_stream(config.prompt))
+                except asyncio.CancelledError:
+                    _kill_sdk_subprocess(client)
+                    self._cleanup_session(session_id)
+                    raise
+                except Exception:
+                    log.error("claude_session_create_failed", exc_info=True)
+                    _kill_sdk_subprocess(client)
+                    self._cleanup_session(session_id)
+                    raise
+            else:
+                log.error("claude_session_create_failed", exc_info=True)
+                self._cleanup_session(session_id)
+                raise
 
         self._clients[session_id] = client
 
@@ -694,9 +827,8 @@ class ClaudeAdapter(BaseAgentAdapter):
         queue = self._queues.get(session_id)
         if queue is None:
             log.error("claude_stream_no_queue", session_id=session_id)
-            from traceforge.types import EventMetadata
-
             from backend.models.events import new_event
+            from backend.models.session_event import EventMetadata
 
             job_id = self._session_to_job.get(session_id, session_id)
             yield new_event(
@@ -738,15 +870,18 @@ class ClaudeAdapter(BaseAgentAdapter):
             self._cleanup_session(session_id)
 
     async def send_message(self, session_id: str, message: str) -> None:
+        from backend.services.completers.copilot_steer import NativeDeliveryError
+
         client = self._clients.get(session_id)
         if client is None:
             log.warning("claude_send_no_session", session_id=session_id)
-            return
+            raise NativeDeliveryError("Managed Claude session is no longer live")
         try:
             # Start a new turn on the existing session
             await client.query(message)
-        except (OSError, RuntimeError):
+        except (OSError, RuntimeError) as exc:
             log.warning("claude_send_message_failed", session_id=session_id, exc_info=True)
+            raise NativeDeliveryError("Managed Claude delivery is unknown", uncertain=True) from exc
 
     async def interrupt_session(self, session_id: str) -> None:
         client = self._clients.get(session_id)
@@ -782,58 +917,157 @@ class ClaudeAdapter(BaseAgentAdapter):
         from claude_code_sdk import (
             AssistantMessage,
             ClaudeCodeOptions,
+            PermissionResultDeny,
             ResultMessage,
             TextBlock,
+            ToolUseBlock,
             query,
         )
 
-        from backend.services.adapters.agent_adapter import CompletionResult
+        completion = current_completion_context()
+        tool_attempted = False
+
+        async def _deny_tool(tool_name: str, arguments: dict[str, Any], context: object) -> PermissionResultDeny:
+            nonlocal tool_attempted
+            tool_attempted = True
+            return PermissionResultDeny(message="Text-only utility sessions cannot invoke tools")
 
         options = ClaudeCodeOptions(
             max_turns=1,
             model=model or "claude-haiku-4-5",
-            permission_mode="bypassPermissions",
+            permission_mode="default",
             allowed_tools=[],
+            disallowed_tools=sorted(set(excluded_tools or ()) | {"*"}),
+            can_use_tool=_deny_tool,
+            system_prompt=system_message,
+            extra_args={"tools": ""},
         )
 
         collected: list[str] = []
-        result_meta: dict[str, object] = {}
+        usage: list[UsageAmount] = []
+        served_model = ""
+        collected_bytes = 0
+        completed = False
+
+        def result_snapshot() -> CompletionResult:
+            return CompletionResult(
+                text="\n".join(collected),
+                input_tokens=sum(int(item.amount) for item in usage if item.unit == "input_tokens"),
+                output_tokens=sum(int(item.amount) for item in usage if item.unit == "output_tokens"),
+                cost_usd=sum(float(item.amount) for item in usage if item.unit == "USD"),
+                model=served_model,
+                usage=tuple(usage),
+            )
+
+        def collect(text: str) -> None:
+            nonlocal collected_bytes
+            collected_bytes += len(text.encode("utf-8")) + (1 if collected else 0)
+            if collected_bytes > completion.max_output_bytes:
+                raise UtilityCompletionError("Text-only output exceeds its bound", reason="output_limit")
+            collected.append(text)
+
+        responses = query(prompt=_prompt_to_stream(prompt), options=options)
         try:
 
-            async def _run_query() -> None:
-                async for message in query(prompt=prompt, options=options):
+            async def _consume_query() -> None:
+                nonlocal completed, served_model
+                async for message in responses:
                     if isinstance(message, AssistantMessage):
+                        actual_model = getattr(message, "model", None)
+                        if isinstance(actual_model, str) and actual_model:
+                            if served_model and served_model != actual_model:
+                                raise UtilityCompletionError("Utility served multiple models", reason="model_mismatch")
+                            served_model = actual_model
                         for block in getattr(message, "content", []) or []:
+                            if isinstance(block, ToolUseBlock):
+                                raise UtilityCompletionError(
+                                    "Text-only completion requested tools", reason="tool_request"
+                                )
                             if isinstance(block, TextBlock):
                                 text = block.text
                                 if text:
-                                    collected.append(text)
+                                    collect(text)
                     elif isinstance(message, ResultMessage):
+                        if message.is_error:
+                            raise UtilityCompletionError("Claude completion failed", reason="sdk_error")
                         result = getattr(message, "result", "")
-                        if result:
-                            collected.append(result)
                         # Capture usage/cost from the result message
-                        usage = getattr(message, "usage", {}) or {}
-                        if isinstance(usage, dict):
-                            result_meta["input_tokens"] = usage.get("input_tokens", 0)
-                            result_meta["output_tokens"] = usage.get("output_tokens", 0)
-                        result_meta["cost_usd"] = getattr(message, "total_cost_usd", 0.0) or 0.0
-                        result_meta["model"] = getattr(message, "model", "") or ""
+                        raw_usage = getattr(message, "usage", {}) or {}
+                        values = (
+                            {
+                                "input_tokens": raw_usage.get("input_tokens"),
+                                "output_tokens": raw_usage.get("output_tokens"),
+                                "cache_read_tokens": raw_usage.get("cache_read_input_tokens"),
+                                "cache_write_tokens": raw_usage.get("cache_creation_input_tokens"),
+                                "USD": getattr(message, "total_cost_usd", None),
+                            }
+                            if isinstance(raw_usage, dict)
+                            else {}
+                        )
+                        for unit, value in values.items():
+                            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                                usage.append(
+                                    UsageAmount.model_validate(
+                                        {
+                                            "amount": value,
+                                            "unit": unit,
+                                            "producer": "claude",
+                                            "model": served_model or None,
+                                            "job_id": completion.job_id,
+                                            "execution_epoch": completion.execution_epoch,
+                                            "role": completion.role,
+                                            "source": "ResultMessage",
+                                            "verified": unit == "USD",
+                                            "currency": "USD" if unit == "USD" else None,
+                                        }
+                                    )
+                                )
+                        completed = True
+                        if result and result not in collected:
+                            collect(result)
                         break
 
+            async def _run_query() -> None:
+                try:
+                    await _consume_query()
+                finally:
+                    close = getattr(responses, "aclose", None)
+                    if not callable(close):
+                        raise UtilityCompletionError(
+                            "Claude utility stream cannot be closed", reason="cleanup_unavailable"
+                        )
+                    await close()
+
             await asyncio.wait_for(_run_query(), timeout=COMPLETION_TIMEOUT_S)
-        except TimeoutError:
-            log.warning("claude_complete_timeout", prompt_len=len(prompt))
-        except (OSError, RuntimeError):
-            log.error("claude_complete_failed", prompt_len=len(prompt), exc_info=True)
-            return CompletionResult()
-        return CompletionResult(
-            text="\n".join(collected),
-            input_tokens=int(result_meta.get("input_tokens", 0) or 0),  # type: ignore[call-overload]
-            output_tokens=int(result_meta.get("output_tokens", 0) or 0),  # type: ignore[call-overload]
-            cost_usd=float(result_meta.get("cost_usd", 0.0) or 0.0),  # type: ignore[arg-type]
-            model=str(result_meta.get("model", "") or ""),
-        )
+        except UtilityCompletionError as exc:
+            if completed:
+                exc.completion = result_snapshot()
+            raise
+        except TimeoutError as exc:
+            raise UtilityCompletionError(
+                "Claude completion timed out",
+                reason="timeout",
+                completion=result_snapshot() if completed else None,
+            ) from exc
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise UtilityCompletionError(
+                "Claude completion failed",
+                reason="sdk_error",
+                completion=result_snapshot() if completed else None,
+            ) from exc
+        if not completed:
+            raise UtilityCompletionError("Claude completion returned no complete text", reason="empty_response")
+        result = result_snapshot()
+        if tool_attempted:
+            raise UtilityCompletionError(
+                "Text-only completion requested tools", reason="tool_request", completion=result
+            )
+        if not result.text or not result.text.strip():
+            raise UtilityCompletionError(
+                "Claude completion returned no complete text", reason="empty_response", completion=result
+            )
+        validate_completion_identity(model, served_model, completion, result=result)
+        return result
 
 
 # ---------------------------------------------------------------------------

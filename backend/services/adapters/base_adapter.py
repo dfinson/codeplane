@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -20,22 +21,26 @@ import structlog
 from sqlalchemy.exc import DBAPIError
 
 from backend.models.domain import (
+    ApprovalAlreadyResolvedError,
+    ApprovalNotFoundError,
     ApprovalResolution,
 )
 from backend.models.events import EventKind, SessionEvent, new_event
+from backend.models.session_event import EventMetadata
+from backend.models.usage import UsageAmount
 from backend.services.adapters.agent_adapter import AgentAdapterInterface, normalize_model_name
-from backend.services.auth.permission_policy import (
-    PermissionRequest,
-    is_hard_gated_command,
-)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Coroutine
 
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-    from traceforge.types import ToolMotivation
 
     from backend.models.api_schemas import ExecutionPhase
+    from backend.models.domain import SessionConfig
+    from backend.models.session_event import ToolMotivation
+    from backend.services.action_policy.classifier import RepoPolicy
+    from backend.services.action_policy.session_policy import SessionPolicy
+    from backend.services.auth.permission_policy import PermissionRequest
     from backend.services.events.event_bus import EventBus
     from backend.services.job.approval_service import ApprovalService
 
@@ -89,6 +94,10 @@ class BaseAgentAdapter(AgentAdapterInterface):
         self._clients: dict[str, Any] = {}  # SDK client type varies by adapter subclass
         self._session_to_job: dict[str, str] = {}
         self._session_kinds: dict[str, str] = {}  # session_id → session_kind for telemetry
+        self._session_metadata: dict[str, EventMetadata] = {}
+        self._session_workspaces: dict[str, str] = {}
+        self._session_protected_paths: dict[str, tuple[str, ...]] = {}
+        self._permission_generations: dict[str, object] = {}
         self._paused_sessions: set[str] = set()
         self._approval_service = approval_service
         self._event_bus = event_bus
@@ -98,6 +107,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
         self._worktree_paths: dict[str, str] = {}  # job_id → cwd
         self._job_start_times: dict[str, float] = {}
         self._job_main_models: dict[str, str] = {}
+        self._session_models: dict[str, str] = {}
         self._last_telemetry_broadcast: dict[str, float] = {}
         self._current_phases: dict[str, str] = {}
         self._write_tasks: list[asyncio.Task[None]] = []
@@ -123,21 +133,58 @@ class BaseAgentAdapter(AgentAdapterInterface):
         motivation: ToolMotivation | None = None,
         partial: bool = False,
     ) -> None:
-        """Build a native ``traceforge.SessionEvent`` and enqueue it for *session_id*.
+        """Build a canonical application-owned event and enqueue it for *session_id*.
 
         The single event-construction point for managed adapters; ``kind`` is a
         dotted CodePlane ``EventKind`` and *payload*/*metadata* carry TF-native
         fields consumed by ``EventProcessor`` and downstream consumers.
         """
-        from traceforge.types import EventMetadata
-
-        metadata = EventMetadata(
-            source_framework=self._source_framework,
-            duration_ms=duration_ms,
-            motivation=motivation,
-            partial=partial,
+        metadata = self._event_metadata(session_id).model_copy(
+            update={
+                "duration_ms": duration_ms,
+                "motivation": motivation,
+                "partial": partial,
+            }
         )
         self._enqueue(session_id, new_event(session_id=job_id, kind=kind, payload=payload, metadata=metadata))
+
+    def _event_metadata(self, session_id: str) -> EventMetadata:
+        return self._session_metadata.get(session_id, EventMetadata()).model_copy(
+            update={"source_framework": self._source_framework, "run_id": session_id},
+        )
+
+    def _native_usage(
+        self,
+        session_id: str,
+        values: dict[str, int | float | None],
+        source: str,
+        *,
+        model: str | None,
+    ) -> list[dict[str, Any]]:
+        metadata = self._event_metadata(session_id)
+        kind = self.get_session_kind(session_id)
+        role = "scout" if kind == "preflight" else "primary" if kind == "job" else "utility"
+        result = []
+        for unit, amount in values.items():
+            if amount is None:
+                continue
+            result.append(
+                UsageAmount.model_validate(
+                    {
+                        "unit": unit,
+                        "amount": amount,
+                        "currency": "USD" if unit == "USD" else None,
+                        "verified": unit == "USD" and self._source_framework == "claude",
+                        "job_id": self._session_to_job.get(session_id),
+                        "execution_epoch": metadata.execution_epoch,
+                        "producer": self._source_framework,
+                        "model": model,
+                        "role": role,
+                        "source": source,
+                    }
+                ).model_dump(mode="json")
+            )
+        return result
 
     def _emit_log_line(self, session_id: str, job_id: str, message: str, level: str = "info") -> None:
         """Emit a native ``log`` event (re-homed from EventPipeline._emit_log)."""
@@ -156,12 +203,34 @@ class BaseAgentAdapter(AgentAdapterInterface):
 
     def set_job_id(self, session_id: str, job_id: str) -> None:
         """Associate a session with a job for telemetry routing."""
+        if self._session_to_job.get(session_id) != job_id:
+            self._permission_generations[session_id] = object()
         self._session_to_job[session_id] = job_id
         self._job_start_times.setdefault(job_id, time.monotonic())
 
     def set_session_kind(self, session_id: str, kind: str) -> None:
         """Tag a session with its kind for telemetry dimension tracking."""
         self._session_kinds[session_id] = kind
+
+    def set_session_metadata(self, session_id: str, config: SessionConfig) -> None:
+        from backend.services.action_policy.session_policy import SessionPolicy
+
+        self._permission_generations[session_id] = object()
+        self._session_workspaces[session_id] = config.workspace_path
+        self._session_protected_paths[session_id] = tuple(config.protected_paths)
+        router = self._policy_router.get(config.job_id)
+        epoch, token = config.execution_epoch, config.execution_token
+        if isinstance(router, SessionPolicy) and config.attempt_id is None:
+            epoch = epoch or router.execution_epoch
+            token = token or uuid.uuid4().hex
+        self._session_metadata[session_id] = EventMetadata(
+            recipe_run_id=config.recipe_run_id,
+            recipe_revision=config.recipe_revision,
+            step_instance_id=config.step_instance_id,
+            attempt_id=config.attempt_id,
+            execution_epoch=epoch,
+            execution_token=token,
+        )
 
     def get_session_kind(self, session_id: str) -> str:
         """Return the session_kind for a session (defaults to 'job')."""
@@ -173,9 +242,24 @@ class BaseAgentAdapter(AgentAdapterInterface):
 
     def pause_tools(self, session_id: str) -> None:
         self._paused_sessions.add(session_id)
+        self._permission_generations[session_id] = object()
 
     def resume_tools(self, session_id: str) -> None:
         self._paused_sessions.discard(session_id)
+
+    def _capture_permission_fence(self, session_id: str) -> tuple[str | None, object]:
+        return self._session_to_job.get(session_id), self._permission_generations.setdefault(session_id, object())
+
+    def _permission_fence_is_current(self, session_id: str, fence: tuple[str | None, object]) -> bool:
+        owner, generation = fence
+        current = (
+            session_id not in self._paused_sessions
+            and self._permission_generations.get(session_id) is generation
+            and self._session_to_job.get(session_id) == owner
+        )
+        if not current:
+            log.warning("permission_decision_stale", job_id=owner, session_id=session_id)
+        return current
 
     # Per-job tracking dicts cleaned up together in _cleanup_session_state.
     # NOTE: _policy_router, _repo_policies, _worktree_paths are intentionally
@@ -197,10 +281,15 @@ class BaseAgentAdapter(AgentAdapterInterface):
         """
         self._paused_sessions.discard(session_id)
         session_kind = self._session_kinds.pop(session_id, None)
+        self._session_metadata.pop(session_id, None)
+        self._permission_generations.pop(session_id, None)
+        self._session_workspaces.pop(session_id, None)
+        self._session_protected_paths.pop(session_id, None)
+        self._session_models.pop(session_id, None)
         job_id = self._session_to_job.pop(session_id, None)
         self._clients.pop(session_id, None)
         self._queues.pop(session_id, None)
-        if job_id and session_kind != "preflight":
+        if job_id and session_kind != "preflight" and job_id not in self._session_to_job.values():
             for attr in self._JOB_TRACKING_DICTS:
                 getattr(self, attr).pop(job_id, None)
 
@@ -327,15 +416,33 @@ class BaseAgentAdapter(AgentAdapterInterface):
         actual_model: str,
         requested_model: str,
     ) -> None:
-        """First-call model verification: log mismatch, emit event, persist.
-
-        Safe to call multiple times — only acts on the first invocation
-        per job (guards on ``_job_main_models``).
-        """
-        if not actual_model or job_id in self._job_main_models:
+        """Verify reported identity per attempt, retaining legacy primary Job behavior."""
+        if not actual_model:
             return
-        self._job_main_models[job_id] = actual_model
-        self._schedule_db_write(self._db_write_set_model(job_id=job_id, model=actual_model))
+        metadata = self._session_metadata.get(session_id)
+        is_attempt = metadata is not None and metadata.attempt_id is not None
+        if is_attempt:
+            if self._session_models.get(session_id) == actual_model:
+                return
+            self._session_models[session_id] = actual_model
+            self._emit_tf(
+                session_id,
+                job_id,
+                EventKind.model_observed,
+                {
+                    "requested_model": requested_model or None,
+                    "actual_model": actual_model,
+                    "model_match": normalize_model_name(actual_model) == normalize_model_name(requested_model)
+                    if requested_model and requested_model != "auto"
+                    else None,
+                },
+            )
+        else:
+            if job_id in self._job_main_models:
+                return
+            self._session_models[session_id] = actual_model
+            self._job_main_models[job_id] = actual_model
+            self._schedule_db_write(self._db_write_set_model(job_id=job_id, model=actual_model))
 
         if (
             requested_model
@@ -348,19 +455,17 @@ class BaseAgentAdapter(AgentAdapterInterface):
                 actual=actual_model,
                 job_id=job_id,
             )
-            self._enqueue(
+            self._emit_tf(
                 session_id,
-                new_event(
-                    session_id=job_id,
-                    kind=EventKind.model_downgraded,
-                    payload={
-                        "requested_model": requested_model,
-                        "actual_model": actual_model,
-                    },
-                ),
+                job_id,
+                EventKind.model_downgraded,
+                {"requested_model": requested_model, "actual_model": actual_model},
             )
         else:
             log.info("model_confirmed", model=actual_model, job_id=job_id)
+
+    def get_reported_model(self, session_id: str) -> str | None:
+        return self._session_models.get(session_id)
 
     # ------------------------------------------------------------------
     # Shared tool event helpers (used by Claude + Copilot adapters)
@@ -388,7 +493,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
 
         When set, ``_evaluate_permission`` applies the SPEC §18.2 hard-gate
         pre-check and then routes the request through this classifier/router for
-        the ``traceforge.governance`` decision. There is no legacy fallback path.
+        the bound standalone decision. There is no legacy fallback path.
         """
         self._policy_router[job_id] = router
         self._repo_policies[job_id] = policy
@@ -398,6 +503,38 @@ class BaseAgentAdapter(AgentAdapterInterface):
         """Hot-swap the RepoPolicy for a running job (mid-job policy reload)."""
         if job_id in self._repo_policies:
             self._repo_policies[job_id] = policy
+        from backend.services.action_policy.standalone_router import StandalonePolicyRouter
+
+        router = self._policy_router.get(job_id)
+        if isinstance(router, StandalonePolicyRouter):
+            router.update_policy(policy)
+
+    def attach_attempt_policy(
+        self,
+        session_id: str,
+        job_id: str,
+        attempt_id: str,
+        epoch: str,
+        router: SessionPolicy,
+        policy: RepoPolicy,
+        *,
+        execution_token: str,
+    ) -> None:
+        metadata = self._session_metadata.get(session_id)
+        if (
+            self._session_to_job.get(session_id) != job_id
+            or metadata is None
+            or metadata.attempt_id != attempt_id
+            or metadata.execution_epoch != epoch
+            or not self._session_workspaces.get(session_id)
+            or not execution_token
+        ):
+            raise ValueError("Policy attachment requires the exact attributed session and trusted workspace")
+        self._policy_router[job_id] = router
+        self._repo_policies[job_id] = policy
+        if metadata.execution_token != execution_token:
+            self._permission_generations[session_id] = object()
+        self._session_metadata[session_id] = metadata.model_copy(update={"execution_token": execution_token})
 
     def cleanup_job_policy(self, job_id: str) -> None:
         """Remove per-job policy state.  Called at end-of-job by RuntimeService."""
@@ -431,124 +568,65 @@ class BaseAgentAdapter(AgentAdapterInterface):
         *,
         tool_name: str = "",
         tool_input: dict[str, Any] | None = None,
+        fence: tuple[str | None, object] | None = None,
+        tool_call_id: str | None = None,
+        dialect: str | None = None,
+        tool_definition: str = "",
     ) -> PermissionDecision:
         """Evaluate a tool permission request against CodePlane's policy.
 
         Returns ``PermissionDecision.allow`` or ``PermissionDecision.deny``.
         Paused sessions deny immediately and SPEC §18.2 hard-gated commands are
         routed to the operator; every other request is decided by the action
-        policy router via ``traceforge.governance``
-        (RecommendedAction ALLOW / WARN / ESCALATE / DENY / TRANSFORM).
+        current execution-bound standalone policy router.
         """
-        # Paused — immediately deny
-        if session_id in self._paused_sessions:
+        fence = fence if fence is not None else self._capture_permission_fence(session_id)
+        if not self._permission_fence_is_current(session_id, fence):
             return PermissionDecision.deny
+        owner, _ = fence
+        if owner is not None and owner != job_id:
+            log.error("permission_session_owner_mismatch", session_id=session_id, job_id=job_id)
+            return PermissionDecision.deny
+        from backend.services.action_policy.session_policy import PermissionInvocation, SessionPolicy
 
-        # Hard gate: SPEC §18.2 commands (git merge/pull/rebase/cherry-pick,
-        # reset --hard, force-push) always reach the operator — this pre-check
-        # runs BEFORE governance scoring so no trust grant or budget waiver can
-        # silently bypass it (binding condition §3, defence in depth).
-        shell_cmd = self._resolve_shell_command(
-            request.kind,
-            tool_name,
-            tool_input,
-            request.full_command_text,
-        )
-        if shell_cmd and is_hard_gated_command(shell_cmd):
-            resolution = await self._hard_block_approval(
-                session_id,
-                job_id,
-                shell_cmd,
-                tool_input,
-            )
-            return PermissionDecision.allow if resolution == ApprovalResolution.approved else PermissionDecision.deny
+        router = self._policy_router.get(job_id) if job_id is not None else None
+        if isinstance(router, SessionPolicy):
+            workspace = self._session_workspaces.get(session_id)
+            if not job_id or not workspace:
+                log.error("permission_session_context_missing", session_id=session_id, job_id=job_id)
+                return PermissionDecision.deny
 
-        # --- Action policy router ---
-        if job_id and job_id in self._policy_router:
-            return await self._evaluate_with_policy_router(
-                session_id,
-                job_id,
-                request,
-                tool_name=tool_name,
-                tool_input=tool_input,
-            )
+            async def current() -> bool:
+                return (
+                    self._permission_fence_is_current(session_id, fence) and self._policy_router.get(job_id) is router
+                )
 
-        log.error(
-            "no_policy_router_for_job",
-            job_id=job_id,
-            session_id=session_id,
-            tool_name=tool_name,
-        )
-        return PermissionDecision.deny
-
-    async def _evaluate_with_policy_router(
-        self,
-        session_id: str,
-        job_id: str,
-        request: PermissionRequest,
-        *,
-        tool_name: str = "",
-        tool_input: dict[str, Any] | None = None,
-    ) -> PermissionDecision:
-        """Route a permission request through the action policy classifier/router."""
-        from backend.services.action_policy.classifier import Action, ActionKind
-
-        # Map SDK permission request kind to Action
-        shell_cmd = self._resolve_shell_command(
-            request.kind,
-            tool_name,
-            tool_input,
-            request.full_command_text,
-        )
-        kind_map = {
-            "read": ActionKind.sdk_tool,
-            "write": ActionKind.file,
-            "shell": ActionKind.shell,
-            "mcp": ActionKind.mcp_tool,
-            "url": ActionKind.sdk_tool,
-            "memory": ActionKind.sdk_tool,
-            "custom-tool": ActionKind.sdk_tool,
-        }
-        action = Action(
-            kind=kind_map.get(request.kind, ActionKind.sdk_tool),
-            path=request.file_name or request.path,
-            command=shell_cmd or None,
-            tool_name=tool_name or request.kind,
-            mcp_server=None,  # MCP tool metadata not in PermissionRequest
-            mcp_tool=tool_name if request.kind == "mcp" else None,
-            mcp_read_only=request.read_only or False,
-            job_id=job_id,
-            workspace_path=request.workspace_path,
-        )
-
-        cwd = self._worktree_paths.get(job_id)
-        router = self._policy_router[job_id]
-
-        decision = await router.route(action, cwd=cwd)
-
-        # Emit action_classified event for the live timeline (TraceForge fields).
-        cls = decision.classification
-        if cls is not None and self._event_bus is not None:
-            await self._event_bus.publish(
-                new_event(
-                    session_id=job_id,
-                    timestamp=datetime.now(UTC),
-                    kind=EventKind.action_classified,
-                    payload={
-                        "recommendedAction": decision.recommended_action.value,
-                        "reasonCode": cls.reason_code,
-                        "riskScore": cls.risk_score,
-                        "riskBand": cls.risk_band,
-                        "effect": cls.effect,
-                        "tool_name": tool_name or request.kind,
-                        "path": request.file_name or request.path,
-                        "checkpoint_ref": decision.checkpoint_ref,
-                    },
+            try:
+                arguments_json = json.dumps(tool_input or {}, sort_keys=True, ensure_ascii=False, allow_nan=False)
+            except (TypeError, ValueError):
+                log.error("permission_arguments_invalid", session_id=session_id, job_id=job_id)
+                return PermissionDecision.deny
+            allowed = await router.authorize_permission(
+                PermissionInvocation(
+                    job_id=job_id,
+                    session_id=session_id,
+                    provider=self._source_framework,
+                    metadata=self._event_metadata(session_id),
+                    workspace=workspace,
+                    protected_paths=self._session_protected_paths.get(session_id, ()),
+                    request=request,
+                    tool_name=tool_name,
+                    arguments_json=arguments_json,
+                    is_current=current,
+                    tool_call_id=tool_call_id,
+                    dialect=dialect,
+                    tool_definition=tool_definition,
+                    approval_callback=lambda event: self._enqueue(session_id, event),
                 )
             )
+            return PermissionDecision.allow if allowed and await current() else PermissionDecision.deny
 
-        if decision.proceed:
-            return PermissionDecision.allow
+        log.error("no_current_policy_router_for_job", job_id=job_id, session_id=session_id, tool_name=tool_name)
         return PermissionDecision.deny
 
     async def _hard_block_approval(
@@ -563,6 +641,10 @@ class BaseAgentAdapter(AgentAdapterInterface):
             log.error("hard_gated_command_blocked_no_infra", command=shell_cmd)
             return ApprovalResolution.rejected
 
+        fence = self._capture_permission_fence(session_id)
+        metadata = self._event_metadata(session_id)
+        if not self._permission_fence_is_current(session_id, fence):
+            return ApprovalResolution.rejected
         description = f"⚠️ Hard-gated command (§18.2) — requires operator approval: {shell_cmd}"
         proposed = json.dumps(tool_input, default=str) if tool_input else shell_cmd
         approval = await self._approval_service.create_request(
@@ -571,11 +653,14 @@ class BaseAgentAdapter(AgentAdapterInterface):
             proposed_action=proposed,
             requires_explicit_approval=True,
         )
+        if await self._retire_approval_if_stale(session_id, fence, approval.id):
+            return ApprovalResolution.rejected
         self._enqueue(
             session_id,
             new_event(
                 session_id=job_id,
                 kind=EventKind.approval_requested,
+                metadata=metadata,
                 payload={
                     "description": description,
                     "proposed_action": proposed,
@@ -590,7 +675,29 @@ class BaseAgentAdapter(AgentAdapterInterface):
             job_id=job_id,
             command=shell_cmd,
         )
-        return await self._approval_service.wait_for_resolution(approval.id)
+        resolution = await self._approval_service.wait_for_resolution(approval.id)
+        if await self._retire_approval_if_stale(session_id, fence, approval.id):
+            return ApprovalResolution.rejected
+        return resolution
+
+    async def _retire_approval_if_stale(
+        self,
+        session_id: str,
+        fence: tuple[str | None, object],
+        approval_id: str,
+    ) -> bool:
+        if self._permission_fence_is_current(session_id, fence):
+            return False
+        assert self._approval_service is not None
+        try:
+            await self._approval_service.resolve(
+                approval_id,
+                ApprovalResolution.rejected,
+                notes="Originating execution changed before permission release",
+            )
+        except (ApprovalAlreadyResolvedError, ApprovalNotFoundError):
+            log.info("stale_permission_approval_already_retired", session_id=session_id, approval_id=approval_id)
+        return True
 
     async def _route_to_operator(
         self,
@@ -604,16 +711,23 @@ class BaseAgentAdapter(AgentAdapterInterface):
             log.warning("permission_ask_no_infra")
             return ApprovalResolution.approved
 
+        fence = self._capture_permission_fence(session_id)
+        metadata = self._event_metadata(session_id)
+        if not self._permission_fence_is_current(session_id, fence):
+            return ApprovalResolution.rejected
         approval = await self._approval_service.create_request(
             job_id=job_id,
             description=description,
             proposed_action=proposed_action,
         )
+        if await self._retire_approval_if_stale(session_id, fence, approval.id):
+            return ApprovalResolution.rejected
         self._enqueue(
             session_id,
             new_event(
                 session_id=job_id,
                 kind=EventKind.approval_requested,
+                metadata=metadata,
                 payload={
                     "description": description,
                     "proposed_action": proposed_action,
@@ -626,7 +740,10 @@ class BaseAgentAdapter(AgentAdapterInterface):
             approval_id=approval.id,
             description=description,
         )
-        return await self._approval_service.wait_for_resolution(approval.id)
+        resolution = await self._approval_service.wait_for_resolution(approval.id)
+        if await self._retire_approval_if_stale(session_id, fence, approval.id):
+            return ApprovalResolution.rejected
+        return resolution
 
     @staticmethod
     def _build_permission_description(

@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Copy, GitFork, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
-import { relayPeerMessage } from "../api/sessionCoordination";
-import type { PeerMessageResponse } from "../api/types";
+import { fetchPeerAgents, relayPeerMessage } from "../api/sessionCoordination";
+import type { PeerMessageRequest, PeerMessageResponse, SessionAgentCard, SessionAgentDirectoryResponse } from "../api/types";
 import type { JobSummary } from "../store";
 import { useSessionCoordination } from "../store/sessionCoordination";
 import { CopilotAccountInfo } from "./CopilotAccountInfo";
@@ -42,10 +42,16 @@ function SessionIdentityDetails({ job }: { job: JobSummary }) {
   const [open, setOpen] = useState(false);
   const [offset, setOffset] = useState(0);
   const [recipient, setRecipient] = useState("");
+  const [agents, setAgents] = useState<SessionAgentDirectoryResponse | null>(null);
+  const [selectedAgent, setSelectedAgent] = useState<SessionAgentCard | null>(null);
+  const [agentCursor, setAgentCursor] = useState("");
+  const [agentError, setAgentError] = useState<string | null>(null);
+  const [agentsLoading, setAgentsLoading] = useState(false);
+  const [agentRefresh, setAgentRefresh] = useState(0);
   const [content, setContent] = useState("");
   const [sending, setSending] = useState(false);
   const [receipt, setReceipt] = useState<PeerMessageResponse | null>(null);
-  const pendingRequest = useRef<{ key: string; id: string } | null>(null);
+  const [pendingRequest, setPendingRequest] = useState<{ key: string; request: PeerMessageRequest; revision: number } | null>(null);
   const draftRevision = useRef(0);
   const directory = useSessionCoordination((state) => state.directories[job.id]);
   const messages = useSessionCoordination((state) => state.messages[job.id]);
@@ -57,23 +63,63 @@ function SessionIdentityDetails({ job }: { job: JobSummary }) {
     if (open) void load(job.id, offset);
   }, [open, job.id, job.state, offset, load]);
 
-  const send = async () => {
-    const submittedRevision = draftRevision.current;
+  useEffect(() => {
+    if (!open || !recipient) return;
+    let active = true;
+    let refresh: ReturnType<typeof setTimeout> | undefined;
+    const update = async () => {
+      setAgentsLoading(true);
+      try {
+        const result = await fetchPeerAgents(job.id, recipient, agentCursor);
+        if (active) {
+          setAgents(result);
+          setAgentError(null);
+        }
+      } catch (failure) {
+        if (active) setAgentError(failure instanceof Error ? failure.message : "Could not load agent cards");
+      } finally {
+        if (active) {
+          setAgentsLoading(false);
+          refresh = setTimeout(() => { void update(); }, 5000);
+        }
+      }
+    };
+    void update();
+    return () => { active = false; clearTimeout(refresh); };
+  }, [open, job.id, recipient, agentCursor, agentRefresh]);
+
+  const selectedIsAvailable = !agentError && agents?.jobId === recipient && agents.items.some((agent) =>
+    agent.agentId === selectedAgent?.agentId && agent.executionToken === selectedAgent.executionToken && agent.acceptsPeerMessages,
+  );
+
+  const send = async (checkPreviousReceipt = false) => {
+    if (sending) return;
+    let pending = pendingRequest;
+    if (checkPreviousReceipt) {
+      if (!pending) return;
+    } else {
+      if (!selectedAgent || !selectedIsAvailable) return;
+      const key = JSON.stringify([recipient, selectedAgent.attemptId, selectedAgent.executionToken, content]);
+      if (pending?.key !== key) {
+        pending = {
+          key, revision: draftRevision.current,
+          request: {
+            messageId: crypto.randomUUID(), recipientJobId: recipient, content,
+            recipientAttemptId: selectedAgent.attemptId, recipientExecutionToken: selectedAgent.executionToken,
+          },
+        };
+        setPendingRequest(pending);
+      }
+    }
+    if (!pending) return;
+    const submittedRevision = checkPreviousReceipt ? pending.revision : draftRevision.current;
     setSending(true);
     try {
-      const key = JSON.stringify([recipient, content]);
-      if (pendingRequest.current?.key !== key) {
-        pendingRequest.current = { key, id: crypto.randomUUID() };
-      }
-      const result = await relayPeerMessage(job.id, {
-        messageId: pendingRequest.current.id,
-        recipientJobId: recipient,
-        content,
-      });
+      const result = await relayPeerMessage(job.id, pending.request);
       setReceipt(result);
       if (result.status !== "unknown") {
         if (draftRevision.current === submittedRevision) setContent("");
-        pendingRequest.current = null;
+        setPendingRequest(null);
       }
       await load(job.id, offset);
     } catch (failure) {
@@ -136,18 +182,59 @@ function SessionIdentityDetails({ job }: { job: JobSummary }) {
                   <p className="text-muted-foreground">Sent by you with this job as context. Agent-authored notes are labeled separately. Paused and inactive sessions are never resumed.</p>
                   <label className="block">
                     Recipient in this project
-                    <select className="mt-1 w-full rounded border border-input bg-background p-2" value={recipient} onChange={(event) => { draftRevision.current += 1; setRecipient(event.target.value); }} required>
-                      <option value="">Choose a running Copilot session</option>
+                    <select className="mt-1 w-full rounded border border-input bg-background p-2" value={recipient} onChange={(event) => {
+                      draftRevision.current += 1;
+                      setRecipient(event.target.value);
+                      setSelectedAgent(null);
+                      setAgents(null);
+                      setAgentCursor("");
+                      setAgentError(null);
+                    }} required>
+                      <option value="">Choose a job to discover its agents</option>
+                      <option value={job.id}>This job's recipe agents</option>
                       {directory.peers?.map((peer) => <option key={peer.id} value={peer.id}>{peer.title || peer.id} ({peer.id})</option>)}
                     </select>
                   </label>
+                  {recipient && (
+                    <fieldset className="space-y-2" aria-busy={agentsLoading}>
+                      <legend className="font-semibold">Choose the relevant agent</legend>
+                      <p className="text-muted-foreground">Cards refresh every five seconds. A changed execution requires a new selection.</p>
+                      {agentError && <p role="alert" className="text-destructive">{agentError}</p>}
+                      {agentsLoading && !agents && <p role="status">Loading agent cards...</p>}
+                      {agents?.items.map((agent) => (
+                        <article key={agent.agentId} className="border-l-2 border-border py-2 pl-3 space-y-1">
+                          <label className="flex items-start gap-2">
+                            <input type="radio" name="peer-agent" className="mt-0.5" disabled={!agent.acceptsPeerMessages}
+                              checked={selectedAgent?.agentId === agent.agentId && selectedAgent.executionToken === agent.executionToken}
+                              onChange={() => { draftRevision.current += 1; setSelectedAgent(agent); }} />
+                            <span className="font-semibold">{agent.name}</span>
+                            <span className="ml-auto text-muted-foreground">{agent.state}</span>
+                          </label>
+                          <p className="text-muted-foreground">{agent.sdk}{agent.model ? ` / ${agent.model}` : ""}{agent.acceptsPeerMessages ? " / Available" : " / Unavailable"}</p>
+                          {agent.description && <details><summary className="cursor-pointer">Agent purpose</summary><p className="whitespace-pre-wrap break-words">{agent.description}</p></details>}
+                          {agent.detail && <p className="text-muted-foreground">{agent.detail}</p>}
+                          <dl><CopyValue label="Agent SDK session ID" value={agent.sessionId} /></dl>
+                        </article>
+                      ))}
+                      {agents && !agents.items.length && <p className="text-muted-foreground">No agents on this page.</p>}
+                      {selectedAgent && !selectedIsAvailable && <p role="status">The selected execution is unavailable or changed. Choose an available agent before sending.</p>}
+                      <div className="flex gap-2">
+                        <button type="button" className={actionClass} onClick={() => setAgentRefresh((value) => value + 1)}>Refresh agent cards</button>
+                        {agentCursor && <button type="button" className={actionClass} onClick={() => setAgentCursor("")}>First agents</button>}
+                        {agents?.nextCursor && <button type="button" className={actionClass} onClick={() => setAgentCursor(agents.nextCursor ?? "")}>More agents</button>}
+                      </div>
+                    </fieldset>
+                  )}
                   <label className="block">
                     Note
                     <textarea className="mt-1 w-full rounded border border-input bg-background p-2" rows={3} maxLength={10000} value={content} onChange={(event) => { draftRevision.current += 1; setContent(event.target.value); }} required />
                   </label>
-                  <button type="submit" className={actionClass} disabled={sending || !recipient || !content.trim()}>
+                  <button type="submit" className={actionClass} disabled={sending || !recipient || !selectedIsAvailable || !content.trim()}>
                     {sending ? "Sending..." : "Send peer note"}
                   </button>
+                  {pendingRequest && !sending && !selectedIsAvailable && (
+                    <button type="button" className={actionClass} onClick={() => void send(true)}>Check previous delivery receipt</button>
+                  )}
                   {receipt && <p role="status">{receipt.status}: {receipt.detail} (message {receipt.messageId})</p>}
                 </form>
               )}
@@ -157,6 +244,7 @@ function SessionIdentityDetails({ job }: { job: JobSummary }) {
                 {messages?.items?.map((message) => (
                   <article key={message.messageId} className="border-l-2 border-border pl-2">
                     <p>{message.origin === "agent" ? "Agent" : "Operator"}: {message.senderJobId} to {message.recipientJobId}</p>
+                    {message.recipientAttemptId && <p className="break-all text-muted-foreground">Recipient attempt: {message.recipientAttemptId}</p>}
                     <p className="whitespace-pre-wrap break-words">{message.content}</p>
                     <p className="text-muted-foreground">{message.status}: {message.detail}</p>
                     <p className="break-all text-muted-foreground">Message {message.messageId}{message.replyTo ? `, reply to ${message.replyTo}` : ""}</p>

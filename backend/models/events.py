@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, TypedDict
 
-from traceforge.types import EventMetadata, SessionEvent
+from backend.models.session_event import EventMetadata, SessionEvent
 
 if TYPE_CHECKING:
     from backend.models.api_schemas import ExecutionPhase
@@ -25,6 +25,7 @@ __all__ = [
     "EventPayload",
     "SessionEvent",
     "new_event",
+    "is_admission_receipt",
 ]
 
 
@@ -60,6 +61,7 @@ class EventKind(StrEnum):
     planning_started = "planning.started"
     tool_call_started = "tool.call.started"
     tool_call_completed = "tool.call.completed"
+    tool_call_failed = "tool.call.failed"
     tool_result_chunk = "tool.result.chunk"
     # --- Imported/native session lifecycle. ``session.ended``/``session.error``
     #     are consumed by the ingest sources (services/ingest/_base.py) for
@@ -100,11 +102,15 @@ class EventKind(StrEnum):
     job_title_updated = "job.title_updated"
     progress_headline = "progress.headline"
     model_downgraded = "model.downgraded"
+    model_observed = "model.observed"
     tool_group_summary = "tool.group_summary"
     agent_plan_updated = "plan.updated"
     execution_phase_changed = "execution.phase_changed"
     telemetry_updated = "telemetry.updated"
     artifacts_updated = "artifacts.updated"
+    tracker_operation_updated = "tracker.operation_updated"
+    recipe_updated = "recipe.updated"
+    review_recorded = "review.recorded"
     # --- Steps / plan ---
     step_started = "step.started"
     step_completed = "step.completed"
@@ -113,6 +119,8 @@ class EventKind(StrEnum):
     plan_step_updated = "plan.step_updated"
     step_entries_reassigned = "step.entries_reassigned"
     turn_summary = "turn.summary"
+    verification_started = "verification.started"
+    verification_result = "verification.result"
     action_classified = "action.classified"
     policy_settings_changed = "policy.settings_changed"
     stall_detected = "stall.detected"
@@ -153,6 +161,7 @@ TRANSCRIPT_KINDS: frozenset[EventKind] = frozenset(
         EventKind.llm_reasoning_failed,
         EventKind.tool_call_started,
         EventKind.tool_call_completed,
+        EventKind.tool_call_failed,
         EventKind.tool_result_chunk,
     }
 )
@@ -166,6 +175,10 @@ TRANSCRIPT_STREAMING_KINDS: frozenset[EventKind] = frozenset(
         EventKind.tool_result_chunk,
     }
 )
+
+
+def is_admission_receipt(event: SessionEvent) -> bool:
+    return bool(event.payload.get("admission_status") or event.payload.get("execution_status") == "unconfirmed")
 
 
 # ---------------------------------------------------------------------------
@@ -365,12 +378,17 @@ class TelemetryUpdatedPayloadDict(_BasePayload, total=False):
 class StepStartedPayloadDict(_BasePayload, total=False):
     intent: str
     trigger: str
+    timing_source: str
+    source_started_at: str | None
 
 
 class StepCompletedPayloadDict(_BasePayload, total=False):
     status: str
     tool_count: int
-    duration_ms: int
+    duration_ms: int | None
+    timing_source: str
+    source_started_at: str | None
+    source_completed_at: str | None
     has_summary: bool
     agent_message: str | None
     files_read: list[str]
@@ -379,6 +397,9 @@ class StepCompletedPayloadDict(_BasePayload, total=False):
     start_sha: str | None
     end_sha: str | None
     preceding_context: str | None
+    diff_additions: int
+    diff_deletions: int
+    worktree_path: str | None
 
 
 class StepTitlePayloadDict(_BasePayload, total=False):
@@ -454,6 +475,7 @@ def new_event(
     metadata: EventMetadata | None = None,
     sequence: int | None = None,
     event_id: str | None = None,
+    raw_event: dict[str, Any] | None = None,
 ) -> SessionEvent:
     """Construct a canonical ``traceforge.SessionEvent`` for a CodePlane job.
 
@@ -473,6 +495,7 @@ def new_event(
         "timestamp": timestamp if timestamp is not None else datetime.now(UTC),
         "payload": dict(payload),
         "metadata": metadata,
+        "raw_event": raw_event,
     }
     if event_id is not None:
         fields["id"] = event_id

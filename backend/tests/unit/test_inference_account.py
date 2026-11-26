@@ -91,10 +91,12 @@ async def test_job_roundtrip_and_rerun_preserve_reference(accounts):
 
 @pytest.mark.parametrize("account,sdk", [("missing", "copilot"), ("tracker", "copilot"), ("a", "claude")])
 async def test_creation_rejects_missing_wrong_provider_and_unsupported_sdk(accounts, account, sdk):
+    config = CPLConfig(repos=["/repo"])
+    config.runtime.copilot_only = False
     async with accounts() as session:
         service = JobService(
             job_repo=JobRepository(session),
-            config=CPLConfig(repos=["/repo"]),
+            config=config,
             git_service=AsyncMock(),
             project_repo=ProjectRepository(session),
             credential_repo=CredentialRepository(session),
@@ -171,13 +173,30 @@ async def test_utility_uses_copilot_for_bound_job_even_when_global_sdk_is_claude
     copilot = MagicMock(complete=AsyncMock())
     claude = MagicMock(complete=AsyncMock())
     registry = MagicMock()
-    registry.get_adapter.side_effect = lambda sdk: copilot if sdk == "copilot" else claude
+    registry.get_completion_provider.side_effect = lambda sdk: copilot if sdk == "copilot" else claude
     utility = InferenceUtilityAdapter(registry, "claude", accounts)
     with inference_scope(job_id="job-a"):
         await utility.complete("bound")
     await utility.complete("ambient")
     copilot.complete.assert_awaited_once()
     claude.complete.assert_awaited_once()
+    registry.get_adapter.assert_not_called()
+
+
+async def test_utility_honors_completion_job_scope_and_independent_ambient_provider(accounts):
+    from backend.services.adapters.completion_context import CompletionContext, completion_context
+
+    copilot = MagicMock(complete=AsyncMock())
+    claude = MagicMock(complete=AsyncMock())
+    registry = MagicMock()
+    registry.get_completion_provider.side_effect = lambda sdk: copilot if sdk == "copilot" else claude
+    utility = InferenceUtilityAdapter(registry, "copilot", accounts, utility_sdk="claude")
+    with completion_context(CompletionContext(job_id="job-a")):
+        await utility.complete("bound")
+    await utility.complete("ambient")
+    copilot.complete.assert_awaited_once()
+    claude.complete.assert_awaited_once()
+    registry.get_adapter.assert_not_called()
 
 
 @pytest.mark.parametrize("ending", ["complete", "error", "close"])

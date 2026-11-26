@@ -18,6 +18,7 @@ function makeJob(overrides: Partial<JobSummary> = {}): JobSummary {
     repo: "/repos/test",
     prompt: "Original archived task",
     state: "completed",
+    sessionCount: 1,
     baseRef: "main",
     worktreePath: null,
     branch: "fix/archived-task",

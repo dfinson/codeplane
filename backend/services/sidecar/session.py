@@ -32,13 +32,16 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from backend.models.currency import optional_float, sum_known, verified_usd
 from backend.models.events import EventKind
+from backend.services.adapters.agent_adapter import UtilityCompletionError
 from backend.services.completers.lightweight_completer import LightweightCompleter
 from backend.services.inference_account import inference_scope
 
 if TYPE_CHECKING:
     from backend.models.domain import SessionConfig, SidecarConfig
     from backend.services.adapters.agent_adapter import AgentAdapterInterface
+    from backend.services.adapters.contracts import TextCompletionProvider
 
 log = structlog.get_logger()
 
@@ -81,7 +84,7 @@ class SidecarSession:
 
     def __init__(
         self,
-        adapter: AgentAdapterInterface,
+        adapter: TextCompletionProvider,
         *,
         system_prompt: str | None = None,
         max_turns: int | None = None,
@@ -92,7 +95,8 @@ class SidecarSession:
     ) -> None:
         self._adapter = adapter
         self.job_id = job_id
-        self._system_prompt = system_prompt or _DEFAULT_SYSTEM_PROMPT
+        self._system_prompt = system_prompt if system_prompt is not None else _DEFAULT_SYSTEM_PROMPT
+        self._custom_system_prompt = system_prompt is not None
         self._prime_lock = asyncio.Lock()
         self._primed = False
         self._model = model
@@ -106,7 +110,7 @@ class SidecarSession:
         self.total_latency_ms: float = 0.0
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
-        self.total_cost_usd: float = 0.0
+        self.total_cost_usd: float | None = None
         self.last_call_at: float | None = None
 
     @property
@@ -122,13 +126,13 @@ class SidecarSession:
         self.total_latency_ms = 0.0
         self.total_input_tokens = 0
         self.total_output_tokens = 0
-        self.total_cost_usd = 0.0
+        self.total_cost_usd = None
         self.last_call_at = None
 
     async def _ensure_primed(self, prompt: str) -> str:
         """Prepend system prompt on the very first call, then let all
         subsequent calls proceed without any lock contention."""
-        if self._primed:
+        if self._custom_system_prompt or self._primed:
             return prompt
         async with self._prime_lock:
             if self._primed:
@@ -166,12 +170,16 @@ class SidecarSession:
                     raise
                 log.debug("sidecar_complete_retry", attempt=attempt + 1)
                 continue
+            if not result.text or not result.text.strip():
+                raise UtilityCompletionError("Text-only completion returned no text", reason="empty_response")
             elapsed_ms = (time.monotonic() - t0) * 1000
             self.call_count += 1
             self.total_latency_ms += elapsed_ms
             self.total_input_tokens += result.input_tokens
             self.total_output_tokens += result.output_tokens
-            self.total_cost_usd += result.cost_usd
+            self.total_cost_usd = sum_known(
+                (self.total_cost_usd, optional_float(verified_usd(getattr(result, "usage", ()))))
+            )
             self.last_call_at = time.monotonic()
             return result.text or ""
         return ""
@@ -206,7 +214,7 @@ class AgenticSidecarSession:
         self.total_latency_ms: float = 0.0
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
-        self.total_cost_usd: float = 0.0
+        self.total_cost_usd: float | None = None
         self.last_call_at: float | None = None
 
     @property
@@ -296,13 +304,15 @@ class SidecarSessionManager:
         *,
         model: str = DEFAULT_UTILITY_MODEL,
         pool_size: int = _STANDBY_POOL_SIZE,
+        completion_provider: TextCompletionProvider | None = None,
     ) -> None:
         self._adapter = adapter
+        self._completion_provider = completion_provider if completion_provider is not None else adapter
         self._model = model
         self._pool_size = pool_size
 
         # Completer — delegates to adapter (SDK)
-        self._completer = LightweightCompleter(adapter, model=model)
+        self._completer = LightweightCompleter(self._completion_provider, model=model)
 
         # Standby pool — ready-to-use SidecarSession instances
         self._pool: deque[SidecarSession] = deque()
@@ -324,7 +334,7 @@ class SidecarSessionManager:
         self._global_latency_ms: float = 0.0
         self._global_input_tokens: int = 0
         self._global_output_tokens: int = 0
-        self._global_cost_usd: float = 0.0
+        self._global_cost_usd: float | None = None
 
     @property
     def model(self) -> str:
@@ -364,13 +374,13 @@ class SidecarSessionManager:
         model: str | None = None,
         excluded_tools: list[str] | None = None,
     ) -> SidecarSession:
-        """Create a new SidecarSession wrapper (cheap — no I/O)."""
+        """Create a wrapper using the configured model unless explicitly overridden."""
         return SidecarSession(
-            adapter=self._adapter,
+            adapter=self._completion_provider,
             system_prompt=system_prompt,
             max_turns=max_turns,
             timeout_s=timeout_s,
-            model=model,
+            model=self._model if model is None else model,
             excluded_tools=excluded_tools,
         )
 
@@ -554,14 +564,14 @@ class SidecarSessionManager:
         total_latency = 0.0
         total_input = 0
         total_output = 0
-        total_cost = 0.0
+        total_cost: float | None = None
         for session in job_sidecars.values():
             self._accumulate_global(session)
             total_calls += session.call_count
             total_latency += session.total_latency_ms
             total_input += session.total_input_tokens
             total_output += session.total_output_tokens
-            total_cost += session.total_cost_usd
+            total_cost = sum_known((total_cost, session.total_cost_usd))
         if total_calls > 0:
             self._closed_jobs[job_id] = {
                 "callCount": total_calls,
@@ -569,7 +579,7 @@ class SidecarSessionManager:
                 "totalLatencyMs": round(total_latency, 1),
                 "inputTokens": total_input,
                 "outputTokens": total_output,
-                "costUsd": round(total_cost, 6),
+                "costUsd": round(total_cost, 6) if total_cost is not None else None,
             }
             while len(self._closed_jobs) > _CLOSED_JOBS_MAX:
                 self._closed_jobs.popitem(last=False)
@@ -581,16 +591,19 @@ class SidecarSessionManager:
         self._global_latency_ms += session.total_latency_ms
         self._global_input_tokens += session.total_input_tokens
         self._global_output_tokens += session.total_output_tokens
-        self._global_cost_usd += session.total_cost_usd
+        self._global_cost_usd = sum_known((self._global_cost_usd, session.total_cost_usd))
 
     # -- Non-job one-shot (Completable protocol) -----------------------------
 
-    async def complete(self, prompt: str, timeout: float = 30.0, *, job_id: str | None = None) -> str:
+    async def complete(
+        self, prompt: str, timeout: float = 30.0, *, job_id: str | None = None, system_prompt: str | None = None
+    ) -> str:
         """One-shot completion for callers without a job context.
 
-        Routes through the SDK adapter via a pooled SidecarSession.
+        Default metadata calls use pooled wrappers. Custom system contexts
+        use disposable wrappers and never enter the metadata pool.
         """
-        session = self._pop_or_create()
+        session = self._pop_or_create(system_prompt=system_prompt)
         session.job_id = job_id
         try:
             for attempt in range(_TIMEOUT_RETRIES + 1):
@@ -601,13 +614,18 @@ class SidecarSessionManager:
                         raise
                     session._primed = False  # noqa: SLF001
             return ""
-        except (OSError, RuntimeError, TimeoutError):
+        except UtilityCompletionError:
             log.warning("sidecar_oneshot_failed", exc_info=True)
-            return ""
+            raise
+        except TimeoutError as exc:
+            raise UtilityCompletionError("Text-only completion timed out", reason="timeout") from exc
+        except (OSError, RuntimeError) as exc:
+            log.warning("sidecar_oneshot_failed", exc_info=True)
+            raise UtilityCompletionError("Text-only completion failed", reason="sdk_error") from exc
         finally:
             session.job_id = None
             self._accumulate_global(session)
-            if len(self._pool) < self._pool_size:
+            if system_prompt is None and len(self._pool) < self._pool_size:
                 session._primed = False  # noqa: SLF001
                 session._reset_metrics()  # noqa: SLF001
                 self._pool.append(session)
@@ -636,7 +654,7 @@ class SidecarSessionManager:
                 "totalLatencyMs": round(jl, 1),
                 "inputTokens": sum(s.total_input_tokens for s in job_sidecars.values()),
                 "outputTokens": sum(s.total_output_tokens for s in job_sidecars.values()),
-                "costUsd": round(sum(s.total_cost_usd for s in job_sidecars.values()), 6),
+                "costUsd": sum_known(s.total_cost_usd for s in job_sidecars.values()),
             }
 
         return {

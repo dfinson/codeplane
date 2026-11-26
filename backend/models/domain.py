@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from backend.models.api_schemas import ArtifactType, ExecutionPhase
+    from backend.models.schemas.recipes import RecipeSelection
 
 
 class JobState(StrEnum):
@@ -208,6 +209,7 @@ class JobSource(StrEnum):
     managed = "managed"
     copilot_cli = "copilot_cli"
     claude_cli = "claude_cli"
+    integration = "integration"
 
 
 class InvalidStateTransitionError(CodePlaneError):
@@ -227,15 +229,10 @@ def validate_state_transition(from_state: JobState | None, to_state: JobState) -
 
 
 class Preset(StrEnum):
-    """Action policy preset — selects the ``traceforge.governance`` profile the
-    router enforces (see ``action_policy/preset_profiles.py``).
+    """Application-owned posture for the standalone action policy.
 
-    autonomous — Generous budget; protected-path writes escalate; no USD ceiling.
-                 Escalations handled by the monitor sidecar.
-    supervised — Moderate budget and USD ceiling; cost pressure and protected-path
-                 writes escalate; monitor handles escalations.
-    locked     — Tight budget and USD ceiling; protected-path writes denied; hard
-                 tool-call ceiling; monitor disabled — escalations go to the human.
+    Hard gates and incomplete evidence remain explicit human decisions.
+    Currency thresholds use verified USD only.
     """
 
     autonomous = "autonomous"
@@ -401,7 +398,7 @@ class CostAttributionRow(TypedDict, total=False):
 
     dimension: str
     bucket: str
-    cost_usd: float
+    cost_usd: float | None
     input_tokens: int
     output_tokens: int
     call_count: int
@@ -427,7 +424,7 @@ class TelemetrySummaryRow(TypedDict, total=False):
     output_tokens: int
     cache_read_tokens: int
     cache_write_tokens: int
-    total_cost_usd: float
+    total_cost_usd: float | None
     premium_requests: float
     llm_call_count: int
     total_llm_duration_ms: int
@@ -447,21 +444,21 @@ class TelemetrySummaryRow(TypedDict, total=False):
     # Added by 0009_cost_attribution
     total_turns: int
     retry_count: int
-    retry_cost_usd: float
+    retry_cost_usd: float | None
     file_read_count: int
     file_write_count: int
     unique_files_read: int
     file_reread_count: int
-    peak_turn_cost_usd: float
-    avg_turn_cost_usd: float
-    cost_first_half_usd: float
-    cost_second_half_usd: float
+    peak_turn_cost_usd: float | None
+    avg_turn_cost_usd: float | None
+    cost_first_half_usd: float | None
+    cost_second_half_usd: float | None
     diff_lines_added: int
     diff_lines_removed: int
     # Added by 0012_error_kind
     agent_error_count: int
     # Added by 0017_add_subagent_cost
-    subagent_cost_usd: float
+    subagent_cost_usd: float | None
     # Latency attribution fields
     parallelism_ratio: float
     idle_ms: int
@@ -480,17 +477,18 @@ class AggregateStats(TypedDict, total=False):
     failed: int
     cancelled: int
     running: int
-    total_cost_usd: float
+    total_cost_usd: float | None
     total_tokens: int
     avg_duration_ms: float
     total_premium_requests: float
     total_tool_calls: int
     total_tool_failures: int
+    total_tool_unknown: int
     total_agent_errors: int
     total_cache_read: int
     total_input_tokens: int
-    total_subagent_cost_usd: float
-    total_retry_cost_usd: float
+    total_subagent_cost_usd: float | None
+    total_retry_cost_usd: float | None
     total_retry_count: int
 
 
@@ -498,7 +496,7 @@ class CostByDayRow(TypedDict):
     """Shape returned by TelemetrySummaryRepository.cost_by_day()."""
 
     date: str
-    cost: float
+    cost: float | None
     jobs: int
 
 
@@ -509,7 +507,7 @@ class CostByRepoRow(TypedDict):
     job_count: int
     succeeded: int
     failed: int
-    total_cost_usd: float
+    total_cost_usd: float | None
     total_tokens: int
     tool_calls: int
     avg_duration_ms: float
@@ -522,7 +520,7 @@ class CostByModelRow(TypedDict, total=False):
     model: str
     sdk: str
     job_count: int
-    total_cost_usd: float
+    total_cost_usd: float | None
     total_tokens: int
     input_tokens: int
     output_tokens: int
@@ -532,12 +530,12 @@ class CostByModelRow(TypedDict, total=False):
     total_turns: int
     total_tool_calls: int
     total_diff_lines: int
-    cost_per_job: float
-    cost_per_minute: float
-    cost_per_turn: float
-    cost_per_tool_call: float
-    cost_per_diff_line: float
-    cost_per_mtok: float
+    cost_per_job: float | None
+    cost_per_minute: float | None
+    cost_per_turn: float | None
+    cost_per_tool_call: float | None
+    cost_per_diff_line: float | None
+    cost_per_mtok: float | None
     cache_hit_rate: float
 
 
@@ -549,6 +547,7 @@ class ToolStatsRow(TypedDict, total=False):
     avg_duration_ms: float
     total_duration_ms: float
     failure_count: int
+    unknown_count: int
     p50_duration_ms: float
     p95_duration_ms: float
     p99_duration_ms: float
@@ -559,7 +558,7 @@ class ShellCommandRow(TypedDict):
 
     command: str
     call_count: int
-    total_cost_usd: float
+    total_cost_usd: float | None
     avg_duration_ms: float
     job_count: int
 
@@ -567,17 +566,17 @@ class ShellCommandRow(TypedDict):
 class RetryCostSummary(TypedDict):
     """Shape returned by TelemetrySpansRepository.retry_cost_summary()."""
 
-    retry_cost_usd: float
+    retry_cost_usd: float | None
     retry_count: int
     total_spans: int
-    total_cost_usd: float
+    total_cost_usd: float | None
 
 
 class CostDimensionRow(TypedDict):
     """Shape returned by CostAttributionRepository.by_dimension()."""
 
     bucket: str
-    cost_usd: float
+    cost_usd: float | None
     input_tokens: int
     output_tokens: int
     call_count: int
@@ -591,14 +590,14 @@ class FleetCostRow(TypedDict):
 
     dimension: str
     bucket: str
-    cost_usd: float
+    cost_usd: float | None
     input_tokens: int
     output_tokens: int
     call_count: int
     cache_read_tokens: int
     cache_write_tokens: int
     job_count: int
-    avg_cost_per_job: float
+    avg_cost_per_job: float | None
 
 
 class LatencyAttributionRow(TypedDict, total=False):
@@ -643,9 +642,9 @@ class ModelComparisonRow(TypedDict, total=False):
     model: str
     sdk: str
     job_count: int
-    avg_cost: float
+    avg_cost: float | None
     avg_duration_ms: float
-    total_cost_usd: float
+    total_cost_usd: float | None
     premium_requests: float
     merged: int
     pr_created: int
@@ -655,11 +654,11 @@ class ModelComparisonRow(TypedDict, total=False):
     verify_job_count: int
     avg_diff_lines: float
     cache_hit_rate: float
-    cost_per_job: float
-    cost_per_minute: float
-    cost_per_turn: float
-    cost_per_tool_call: float
-    cost_per_diff_line: float
+    cost_per_job: float | None
+    cost_per_minute: float | None
+    cost_per_turn: float | None
+    cost_per_tool_call: float | None
+    cost_per_diff_line: float | None
 
 
 @dataclass
@@ -688,8 +687,33 @@ class SessionConfig:
     # Telemetry dimension — classifies this session for cost tracking.
     # "job" for main agent sessions, or "preflight", "narrator", "sidecar" for sidecar sessions.
     session_kind: SessionKind = "job"
-    peer_directory_handler: Callable[[int], Awaitable[dict[str, Any]]] | None = None
-    peer_message_handler: Callable[[str, str, str, str | None], Awaitable[dict[str, Any]]] | None = None
+    peer_directory_handler: Callable[[int, str | None, str], Awaitable[dict[str, Any]]] | None = None
+    peer_message_handler: (
+        Callable[[str, str, str, str | None, str | None, str | None], Awaitable[dict[str, Any]]] | None
+    ) = None
+    execution_capabilities: frozenset[str] | None = None
+    recipe_run_id: str | None = None
+    recipe_revision: int | None = None
+    step_instance_id: str | None = None
+    attempt_id: str | None = None
+    execution_epoch: str | None = None
+    execution_token: str | None = None
+    defer_start: bool = False
+
+
+@dataclass(frozen=True)
+class CurrentExecutionContext:
+    job_id: str
+    execution_token: str | None
+
+
+@dataclass(frozen=True)
+class CurrentExecutionDispatchResult:
+    job_id: str
+    execution_token: str | None
+    status: str
+    reason: str | None = None
+    message_event_id: str | None = None
 
 
 @dataclass
@@ -718,6 +742,7 @@ class JobSpec:
     parent_job_id: str | None = None
     parent_job_context: str | None = None
     mode: JobMode = JobMode.standard
+    recipe: RecipeSelection | None = None
 
 
 @dataclass
@@ -833,13 +858,13 @@ class Job:
     """
 
     id: str
-    repo: str
+    repo: str | None
     project_id: str
     """The Project that owns this repo (AD-5) — never null; a Job cannot
     exist without an owning Project."""
     prompt: str
     state: JobState
-    base_ref: str
+    base_ref: str | None
     branch: str | None
     worktree_path: str | None
     session_id: str | None
@@ -874,12 +899,31 @@ class Job:
     parent_job_id: str | None = None
     source: str = "managed"
     external_session_id: str | None = None
+    integration_binding_id: str | None = None
+    observation_only: bool = False
     tail_offset: int = 0
     mode: JobMode = JobMode.standard
     artifact_collection_status: str = "pending"
     artifact_collection_error: str | None = None
     artifact_collection_session_count: int = 0
     artifact_collection_updated_at: datetime | None = None
+
+    @property
+    def execution_repo(self) -> str:
+        if self.observation_only or not self.repo:
+            raise StateConflictError("Observation history has no executable repository")
+        return self.repo
+
+    @property
+    def execution_base_ref(self) -> str:
+        if self.observation_only or not self.base_ref:
+            raise StateConflictError("Observation history has no executable base reference")
+        return self.base_ref
+
+    @property
+    def execution_workspace(self) -> str:
+        repo = self.execution_repo
+        return self.worktree_path or repo
 
 
 @dataclass

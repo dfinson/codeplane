@@ -9,6 +9,7 @@ import asyncio
 import sys
 import time
 import uuid
+from dataclasses import dataclass, replace
 from types import ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -21,6 +22,8 @@ from backend.models.domain import (
 )
 from backend.models.events import TRANSCRIPT_KINDS, EventKind, SessionEvent, new_event
 from backend.services.adapters.base_adapter import PermissionDecision
+from backend.tests.unit.test_approval_service import session_factory as session_factory
+from backend.tests.unit.test_recipe_runs import sessions as sessions
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -123,6 +126,12 @@ class _FakeClaudeCodeOptions:
             setattr(self, k, v)
 
 
+@dataclass
+class _FakeHookMatcher:
+    hooks: list[Any]
+    matcher: str | None = None
+
+
 class _FakeTransport:
     """Fake transport for _FakeClaudeSDKClient."""
 
@@ -175,6 +184,7 @@ def _build_fake_sdk_module() -> ModuleType:
     mod.AssistantMessage = _FakeAssistantMessage
     mod.ResultMessage = _FakeResultMessage
     mod.ClaudeCodeOptions = _FakeClaudeCodeOptions
+    mod.HookMatcher = _FakeHookMatcher
     mod.ClaudeSDKClient = _FakeClaudeSDKClient
     mod.StreamEvent = _FakeStreamEvent
     mod.query = AsyncMock()
@@ -310,6 +320,90 @@ class TestHiddenTools:
         assert "TodoWrite" not in _HIDDEN_TOOLS
 
 
+class TestKillSdkSubprocess:
+    @pytest.fixture(autouse=True)
+    def process_calls(self, monkeypatch):
+        from backend.services.claude_adapter import _helpers
+
+        kill, waitpid = MagicMock(), MagicMock()
+        monkeypatch.setattr(_helpers.os, "kill", kill)
+        monkeypatch.setattr(_helpers.os, "waitpid", waitpid)
+        monkeypatch.setattr(_helpers.os, "getpid", lambda: 12345)
+        return kill, waitpid
+
+    @pytest.mark.parametrize(
+        "pid",
+        [
+            pytest.param(None, id="missing"),
+            pytest.param(False, id="false"),
+            pytest.param(True, id="true"),
+            pytest.param(-1, id="all-processes"),
+            pytest.param(0, id="process-group"),
+            pytest.param(1, id="init"),
+            pytest.param(12345, id="self"),
+            pytest.param("23456", id="string"),
+            pytest.param(23456.0, id="float"),
+            pytest.param(MagicMock(), id="coercible-mock"),
+        ],
+    )
+    @pytest.mark.parametrize("nested", [False, True])
+    def test_invalid_identity_never_signals_or_waits(self, process_calls, pid, nested):
+        from structlog.testing import capture_logs
+
+        from backend.services.claude_adapter._helpers import _kill_sdk_subprocess
+
+        process = SimpleNamespace(pid=pid, _process=SimpleNamespace(pid=pid) if nested else None)
+        transport = SimpleNamespace(_process=process)
+        query = SimpleNamespace(_tg=object())
+        client = SimpleNamespace(_transport=transport, _query=query)
+        kill, waitpid = process_calls
+
+        with capture_logs() as logs:
+            _kill_sdk_subprocess(client)
+
+        kill.assert_not_called()
+        waitpid.assert_not_called()
+        assert client._transport is transport
+        assert transport._process is process
+        assert client._query is query
+        assert logs == [
+            {
+                "event": "claude_sdk_subprocess_invalid_pid",
+                "log_level": "warning",
+                "pid": pid if type(pid) is int else None,
+                "pid_type": type(pid).__name__,
+            }
+        ]
+        if isinstance(pid, MagicMock):
+            pid.__index__.assert_not_called()
+
+    @pytest.mark.parametrize("layout", ["direct", "nested", "fallback"])
+    def test_valid_identity_preserves_signal_reap_and_cleanup(self, process_calls, layout):
+        import os
+        import signal
+
+        from backend.services.claude_adapter._helpers import _kill_sdk_subprocess
+
+        inner = None if layout == "direct" else SimpleNamespace(pid=23456 if layout == "nested" else None)
+        process = SimpleNamespace(pid=34567 if layout == "nested" else 23456, _process=inner)
+        transport = SimpleNamespace(_process=process, _stdout_stream=object(), _stdin_stream=object(), _ready=True)
+        query = SimpleNamespace(_tg=object())
+        client = SimpleNamespace(_transport=transport, _query=query)
+        kill, waitpid = process_calls
+
+        _kill_sdk_subprocess(client)
+
+        kill.assert_called_once_with(23456, signal.SIGTERM)
+        waitpid.assert_called_once_with(23456, getattr(os, "WNOHANG", 0))
+        assert transport._process is None
+        assert transport._stdout_stream is None
+        assert transport._stdin_stream is None
+        assert not transport._ready
+        assert query._tg is None
+        assert client._query is None
+        assert client._transport is None
+
+
 # ---------------------------------------------------------------------------
 # Tests: ClaudeAdapter internals
 # ---------------------------------------------------------------------------
@@ -437,6 +531,34 @@ class TestBuildCanUseTool:
 
 
 class TestScoutPermissions:
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX native backslashes are not path separators")
+    async def test_native_path_escape_is_denied_before_general_permission(self, adapter, tmp_path) -> None:
+        root = tmp_path / "workspace"
+        root.mkdir()
+        (root / r"a\b").mkdir()
+        (root / "a" / "b").mkdir(parents=True)
+        outside = tmp_path / "outside"
+        outside.write_text("outside bytes")
+        raw = r"a\b/../../outside"
+        assert (root / raw).resolve() == outside
+        adapter._evaluate_permission = AsyncMock(return_value=PermissionDecision.allow)
+        config = _make_config(workspace_path=str(root), execution_capabilities=frozenset({"read"}))
+        callback = adapter._build_can_use_tool(config, "session")
+        result = await callback("Read", {"file_path": raw}, None)
+        assert isinstance(result, _FakePermissionResultDeny)
+        adapter._evaluate_permission.assert_not_awaited()
+
+    async def test_recipe_capability_cannot_be_waived_by_general_permission_allow(self, adapter, tmp_path) -> None:
+        adapter._evaluate_permission = AsyncMock(return_value=PermissionDecision.allow)
+        config = _make_config(workspace_path=str(tmp_path), execution_capabilities=frozenset({"read", "shell"}))
+        callback = adapter._build_can_use_tool(config, "session")
+        result = await callback("Bash", {"command": "echo changed > file"}, None)
+        assert isinstance(result, _FakePermissionResultDeny)
+        adapter._evaluate_permission.assert_not_awaited()
+        result = await callback("Read", {"file_path": "file"}, None)
+        assert isinstance(result, _FakePermissionResultAllow)
+        adapter._evaluate_permission.assert_awaited_once()
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("tool_name", "input_data"),
@@ -572,6 +694,29 @@ class TestScoutPermissions:
 
 
 class TestProcessAssistantMessage:
+    @pytest.mark.parametrize("role", ["job", "preflight"])
+    @pytest.mark.parametrize("requested_model", ["", "requested-model"])
+    async def test_attempt_model_is_recorded_from_assistant_metadata(self, adapter, role, requested_model) -> None:
+        sid = "actual-session"
+        adapter._queues[sid] = asyncio.Queue()
+        adapter.set_job_id(sid, "job-1")
+        adapter.set_session_kind(sid, role)
+        adapter.set_session_metadata(sid, _make_config(attempt_id="attempt", execution_epoch="epoch"))
+        adapter._requested_models[sid] = requested_model
+        adapter._job_main_models["job-1"] = "job-default"
+        await adapter._process_assistant_message(sid, _FakeAssistantMessage(model="reported-model"))
+        observed = adapter._queues[sid].get_nowait()
+        assert observed.kind == EventKind.model_observed
+        assert observed.payload == {
+            "requested_model": requested_model or None,
+            "actual_model": "reported-model",
+            "model_match": False if requested_model else None,
+        }
+        assert observed.metadata.attempt_id == "attempt"
+        assert observed.metadata.run_id == sid
+        assert adapter.get_reported_model(sid) == "reported-model"
+        assert adapter._job_main_models["job-1"] == "job-default"
+
     @pytest.mark.asyncio
     async def test_scout_text_after_tool_request_is_not_a_final_response(self, adapter: ClaudeAdapter) -> None:
         sid = "scout-tool-request"
@@ -629,7 +774,7 @@ class TestProcessAssistantMessage:
 
         await adapter._process_assistant_message(sid, msg)
 
-        assert "tool-1" in adapter._tool_buf
+        assert (sid, "tool-1") in adapter._tool_buf
 
     @pytest.mark.asyncio
     async def test_todo_write_emits_transcript(self, adapter: ClaudeAdapter) -> None:
@@ -643,7 +788,7 @@ class TestProcessAssistantMessage:
         await adapter._process_assistant_message(sid, msg)
 
         # TodoWrite should now be emitted as a transcript event (no longer hidden)
-        assert "tool-2" in adapter._tool_buf
+        assert (sid, "tool-2") in adapter._tool_buf
         assert not adapter._queues[sid].empty()
 
     @pytest.mark.asyncio
@@ -653,7 +798,7 @@ class TestProcessAssistantMessage:
         adapter._session_to_job[sid] = "job-1"
         adapter._schedule_db_write = lambda coro: coro.close()
         # Pre-populate tool metadata (simulates on_tool_start)
-        adapter._tool_buf["tool-1"] = {
+        adapter._tool_buf[sid, "tool-1"] = {
             "job_id": "job-1",
             "tool_name": "Bash",
             "arguments": None,
@@ -870,7 +1015,8 @@ class TestProcessResultMessage:
         assert "error" in error_events[0].payload["message"].lower()
 
     @pytest.mark.asyncio
-    async def test_result_with_job_records_telemetry(self) -> None:
+    @pytest.mark.parametrize("cost", [None, 0, 0.01])
+    async def test_result_with_job_records_telemetry(self, cost) -> None:
         adapter = ClaudeAdapter()
         sid = "sess-1"
         adapter._queues[sid] = asyncio.Queue()
@@ -879,7 +1025,7 @@ class TestProcessResultMessage:
 
         msg = _FakeResultMessage(
             result="ok",
-            total_cost_usd=0.01,
+            total_cost_usd=cost,
             usage={
                 "input_tokens": 10,
                 "output_tokens": 5,
@@ -896,7 +1042,12 @@ class TestProcessResultMessage:
         assert event.payload["output_tokens"] == 5
         assert event.payload["cache_read_tokens"] == 2
         assert event.payload["cache_write_tokens"] == 1
-        assert event.payload["cost_usd"] == 0.01
+        assert event.payload["cost_usd"] == cost
+        money = [item for item in event.payload["native_usage"] if item["unit"] == "USD"]
+        assert len(money) == int(cost is not None)
+        if money:
+            assert float(money[0]["amount"]) == cost
+            assert money[0]["verified"] is True and money[0]["currency"] == "USD"
 
     @pytest.mark.asyncio
     async def test_result_empty_usage_dict(self, adapter: ClaudeAdapter) -> None:
@@ -1005,6 +1156,59 @@ class TestProcessStreamEvent:
 
 
 class TestConsumeMessages:
+    @pytest.mark.parametrize(
+        "terminal,final_text,output_type",
+        [
+            (False, None, "string"),
+            (False, None, "code_ref"),
+            (True, "Actual final answer", "string"),
+            (True, None, "code_ref"),
+            (True, None, None),
+        ],
+    )
+    async def test_recipe_requires_native_result_not_initialization(
+        self, sessions, terminal, final_text, output_type
+    ) -> None:
+        from backend.persistence.recipe_run_repo import RecipeRunRepository
+        from backend.services.recipe.agent_runner import AgentStepRunner
+        from backend.tests.unit.test_recipe_agent_runner import agent_context
+
+        run, instance, attempt, owned, configs, make_runtime, _ = await agent_context(
+            sessions, provider="claude", output_type=output_type
+        )
+        native = ClaudeAdapter()
+        emitted = []
+
+        async def stream(session_id):
+            native._queues[session_id] = asyncio.Queue()
+            native.set_job_id(session_id, run.job_id)
+            native.set_session_kind(session_id, "job")
+            native.set_session_metadata(
+                session_id,
+                replace(configs[-1], execution_token=owned.attach_attempt_policy.call_args.kwargs["execution_token"]),
+            )
+            client = _FakeClaudeSDKClient()
+            client._messages = [_FakeSystemMessage()]
+            if terminal:
+                client._messages.append(_FakeResultMessage(result=final_text))
+            await native._consume_messages(session_id, client)
+            async for event in native.stream_events(session_id):
+                emitted.append(event)
+                yield event
+
+        owned.stream_events = stream
+        host = make_runtime()
+        pin = await host.prepare_execution_contract(run.job_id, run.id, recovery=False)
+        result, outputs = await AgentStepRunner(host).run(run, instance, attempt, _make_config(), contract_pin=pin)
+        assert result.outcome == ("succeeded" if terminal else "interrupted")
+        assert result.evidence.text == final_text
+        assert outputs == ({"result": final_text} if terminal and output_type == "string" else {})
+        assert not any(event.kind == EventKind.message_assistant for event in emitted)
+        async with sessions() as session:
+            repository = RecipeRunRepository(session)
+            assert (await repository.agent_progress(attempt.id))[0] == int(terminal)
+            assert await repository.completed_execution_text(attempt.id) == (terminal, final_text)
+
     @pytest.mark.asyncio
     async def test_system_message_emits_log(self, adapter: ClaudeAdapter) -> None:
         sid = "sess-1"
@@ -1151,7 +1355,11 @@ class TestSendMessage:
 
     @pytest.mark.asyncio
     async def test_send_to_missing_session(self, adapter: ClaudeAdapter) -> None:
-        await adapter.send_message("nonexistent", "hello")  # should not raise
+        from backend.services.completers.copilot_steer import NativeDeliveryError
+
+        with pytest.raises(NativeDeliveryError) as failure:
+            await adapter.send_message("nonexistent", "hello")
+        assert not failure.value.uncertain
 
     @pytest.mark.asyncio
     async def test_send_handles_exception(self, adapter: ClaudeAdapter) -> None:
@@ -1159,7 +1367,11 @@ class TestSendMessage:
         client.query = AsyncMock(side_effect=RuntimeError("send failed"))
         adapter._clients["sess-1"] = client
 
-        await adapter.send_message("sess-1", "oops")  # should not raise
+        from backend.services.completers.copilot_steer import NativeDeliveryError
+
+        with pytest.raises(NativeDeliveryError) as failure:
+            await adapter.send_message("sess-1", "oops")
+        assert failure.value.uncertain
 
 
 # ---------------------------------------------------------------------------
@@ -1187,13 +1399,15 @@ class TestAbortSession:
 
     @pytest.mark.asyncio
     async def test_abort_handles_exception(self, adapter: ClaudeAdapter) -> None:
-        client = MagicMock()
+        client = _FakeClaudeSDKClient()
         client.interrupt = AsyncMock(side_effect=RuntimeError("fail"))
         client.disconnect = AsyncMock()
         adapter._clients["sess-1"] = client
 
         await adapter.abort_session("sess-1")
 
+        client.interrupt.assert_awaited_once()
+        client.disconnect.assert_not_awaited()
         assert "sess-1" not in adapter._clients
 
 
@@ -1203,6 +1417,145 @@ class TestAbortSession:
 
 
 class TestComplete:
+    @pytest.mark.parametrize(
+        ("native_text", "cleanup_timeout"),
+        [("ok", False), ("too many bytes", False), ("ok", True), (None, False), (None, True)],
+    )
+    async def test_cleanup_failure_retains_only_completed_usage(
+        self, adapter: ClaudeAdapter, session_factory, native_text: str | None, cleanup_timeout: bool
+    ) -> None:
+        from backend.models.execution_contracts import ExecutionContractPin
+        from backend.persistence.event_repo import EventRepository
+        from backend.services.adapters.adapter_registry import AdapterRegistry
+        from backend.services.adapters.agent_adapter import UtilityCompletionError
+        from backend.services.adapters.completion_context import CompletionContext, completion_context
+        from backend.tests.unit.test_execution_contracts import _contract
+
+        registry = AdapterRegistry(session_factory=session_factory)
+        pin = ExecutionContractPin(
+            job_id="job-1", admission_id="admission", budget_id="job-1", contract=_contract("pinned")
+        )
+        calls = 0
+
+        async def query(**kwargs: Any):
+            nonlocal calls
+            calls += 1
+            try:
+                yield _FakeAssistantMessage(content=[], model="claude-approved")
+                if native_text is not None:
+                    yield _FakeResultMessage(result=native_text, usage={"input_tokens": 7}, total_cost_usd=0.1)
+            finally:
+                if cleanup_timeout:
+                    await asyncio.get_running_loop().create_future()
+                raise OSError("stream cleanup failed")
+
+        with (
+            patch.dict(sys.modules["claude_code_sdk"].__dict__, {"query": query}),
+            patch("backend.services.claude_adapter._adapter.COMPLETION_TIMEOUT_S", 0.05),
+            patch.object(registry, "_resolve_completion_adapter", return_value=adapter),
+            completion_context(
+                CompletionContext(max_output_bytes=4, job_id="job-1", execution_epoch="epoch", execution_contract=pin)
+            ),
+            pytest.raises(UtilityCompletionError) as caught,
+        ):
+            await registry.get_completion_provider("claude").complete("fixture", model="claude-approved")
+
+        expected = "timeout" if cleanup_timeout else "sdk_error"
+        assert caught.value.reason == expected
+        assert isinstance(caught.value.__cause__, TimeoutError if cleanup_timeout else OSError)
+        async with session_factory() as db_session:
+            events = [row.event for row in await EventRepository(db_session).list_after(0, job_id="job-1")]
+        kinds = ["utility.completion.requested"]
+        result = caught.value.completion
+        if native_text is None:
+            assert result is None
+        else:
+            kinds.append("utility.completion.completed")
+            assert result is not None and result.input_tokens == 7 and result.cost_usd == 0.1
+            assert len(result.text.encode("utf-8")) <= 4
+            assert events[-1].id == result.usage_event_id
+            assert events[-1].payload["rejection_reason"] == expected
+            assert events[-1].payload["usage"] == [amount.model_dump(mode="json") for amount in result.usage]
+        assert [str(event.kind) for event in events] == kinds
+        assert calls == 1
+
+    @pytest.mark.parametrize("native_text", ["", "   ", "too many bytes", "\u03bb" * 3])
+    async def test_completed_rejection_persists_bounded_usage_receipt(
+        self, adapter: ClaudeAdapter, session_factory, native_text: str
+    ) -> None:
+        from backend.models.execution_contracts import ExecutionContractPin
+        from backend.persistence.event_repo import EventRepository
+        from backend.services.adapters.adapter_registry import AdapterRegistry
+        from backend.services.adapters.agent_adapter import UtilityCompletionError
+        from backend.services.adapters.completion_context import CompletionContext, completion_context
+        from backend.tests.unit.test_execution_contracts import _contract
+
+        registry = AdapterRegistry(session_factory=session_factory)
+        pin = ExecutionContractPin(
+            job_id="job-1", admission_id="admission", budget_id="job-1", contract=_contract("pinned")
+        )
+        calls = 0
+
+        async def query(**kwargs: Any):
+            nonlocal calls
+            calls += 1
+            yield _FakeAssistantMessage(content=[], model="claude-approved")
+            yield _FakeResultMessage(result=native_text, usage={"input_tokens": 7}, total_cost_usd=0.1)
+
+        with (
+            patch.dict(sys.modules["claude_code_sdk"].__dict__, {"query": query}),
+            patch.object(registry, "_resolve_completion_adapter", return_value=adapter),
+            completion_context(
+                CompletionContext(max_output_bytes=4, job_id="job-1", execution_epoch="epoch", execution_contract=pin)
+            ),
+            pytest.raises(UtilityCompletionError) as caught,
+        ):
+            await registry.get_completion_provider("claude").complete("fixture", model="claude-approved")
+        expected = "output_limit" if len(native_text.encode("utf-8")) > 4 else "empty_response"
+        assert caught.value.reason == expected
+        result = caught.value.completion
+        assert result is not None and result.input_tokens == 7 and result.cost_usd == 0.1
+        assert len(result.text.encode("utf-8")) <= 4
+        async with session_factory() as db_session:
+            events = [row.event for row in await EventRepository(db_session).list_after(0, job_id="job-1")]
+        assert [str(event.kind) for event in events] == [
+            "utility.completion.requested",
+            "utility.completion.completed",
+        ]
+        assert events[-1].id == result.usage_event_id
+        assert events[-1].payload["rejection_reason"] == expected
+        assert events[-1].payload["usage"] == [amount.model_dump(mode="json") for amount in result.usage]
+        assert calls == 1
+
+    @pytest.mark.parametrize("actual_model", ["claude-unexpected", ""])
+    async def test_rejected_model_retains_observed_completion_usage(
+        self, adapter: ClaudeAdapter, actual_model: str
+    ) -> None:
+        from backend.services.adapters.agent_adapter import UtilityCompletionError
+        from backend.services.adapters.completion_context import CompletionContext, completion_context
+
+        calls = 0
+
+        async def query(**kwargs: Any):
+            nonlocal calls
+            calls += 1
+            yield _FakeAssistantMessage(content=[_FakeTextBlock("observed")], model=actual_model)
+            yield _FakeResultMessage(result="", usage={"input_tokens": 7}, total_cost_usd=0.1)
+
+        with (
+            patch.dict(sys.modules["claude_code_sdk"].__dict__, {"query": query}),
+            completion_context(CompletionContext(role="title")),
+            pytest.raises(UtilityCompletionError) as caught,
+        ):
+            await adapter.complete("fixture", model="claude-approved")
+        assert caught.value.reason == ("model_mismatch" if actual_model else "model_identity_missing")
+        result = caught.value.completion
+        assert result is not None
+        assert result.model == actual_model
+        assert result.input_tokens == 7
+        assert result.cost_usd == 0.1
+        assert calls == 1
+
     @pytest.mark.asyncio
     async def test_collects_text_from_assistant(self, adapter: ClaudeAdapter) -> None:
         async def _fake_query(**kwargs: Any):
@@ -1222,10 +1575,39 @@ class TestComplete:
             raise RuntimeError("boom")
             yield  # noqa: E501
 
-        with patch.dict(sys.modules["claude_code_sdk"].__dict__, {"query": _exploding_query}):
-            result = await adapter.complete("test")
+        from backend.services.adapters.agent_adapter import UtilityCompletionError
 
-        assert result.text is None
+        with (
+            patch.dict(sys.modules["claude_code_sdk"].__dict__, {"query": _exploding_query}),
+            pytest.raises(UtilityCompletionError, match="failed"),
+        ):
+            await adapter.complete("test")
+
+    async def test_empty_timeout_and_tool_output_fail_explicitly(self, adapter) -> None:
+        from backend.services.adapters.agent_adapter import UtilityCompletionError
+        from backend.services.adapters.completion_context import CompletionContext, completion_context
+
+        async def oversized(**kwargs):
+            yield _FakeAssistantMessage(content=[_FakeTextBlock("too many bytes")])
+            yield _FakeResultMessage(result="")
+
+        with (
+            patch.dict(sys.modules["claude_code_sdk"].__dict__, {"query": oversized}),
+            completion_context(CompletionContext(max_output_bytes=4)),
+            pytest.raises(UtilityCompletionError) as failure,
+        ):
+            await adapter.complete("test")
+        assert failure.value.reason == "output_limit"
+
+        async def empty(**kwargs):
+            yield _FakeResultMessage(result="")
+
+        with (
+            patch.dict(sys.modules["claude_code_sdk"].__dict__, {"query": empty}),
+            pytest.raises(UtilityCompletionError) as failure,
+        ):
+            await adapter.complete("test")
+        assert failure.value.reason == "empty_response"
 
 
 # ---------------------------------------------------------------------------
@@ -1234,6 +1616,32 @@ class TestComplete:
 
 
 class TestCreateSession:
+    async def test_cancelled_deferred_connect_releases_owned_client_and_state(self, adapter) -> None:
+        client = _FakeClaudeSDKClient()
+        client.connect = AsyncMock(side_effect=asyncio.CancelledError())
+        with (
+            patch.dict(sys.modules["claude_code_sdk"].__dict__, {"ClaudeSDKClient": lambda opts: client}),
+            patch("backend.services.claude_adapter._adapter._kill_sdk_subprocess") as release,
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await adapter.create_session(_make_config(defer_start=True))
+        release.assert_called_once_with(client)
+        assert not adapter._queues and not adapter._clients
+        assert not adapter._stderr_files and not adapter._stderr_file_objects
+
+    async def test_deferred_attempt_connects_without_a_prompt(self, adapter) -> None:
+        fake_client = _FakeClaudeSDKClient()
+        fake_client.connect = AsyncMock()
+        fake_client.query = AsyncMock()
+        fake_client._messages = []
+        with patch.dict(sys.modules["claude_code_sdk"].__dict__, {"ClaudeSDKClient": lambda opts: fake_client}):
+            session_id = await adapter.create_session(_make_config(defer_start=True))
+        fake_client.connect.assert_awaited_once_with(None)
+        fake_client.query.assert_not_awaited()
+        await adapter.send_message(session_id, "pinned attempt prompt")
+        fake_client.query.assert_awaited_once_with("pinned attempt prompt")
+        await adapter.abort_session(session_id)
+
     @pytest.mark.asyncio
     async def test_create_session_success(self, adapter: ClaudeAdapter) -> None:
         config = _make_config()
@@ -1345,6 +1753,30 @@ class TestCreateSession:
 
 
 class TestToolResultTelemetry:
+    async def test_same_job_parallel_sessions_keep_tool_pairing_and_cleanup_isolated(self, adapter) -> None:
+        for session in ("first", "second"):
+            adapter._queues[session] = asyncio.Queue()
+            adapter.set_job_id(session, "job")
+        for session, name in (("first", "Read"), ("second", "Grep")):
+            block = _FakeToolUseBlock(id="shared", name=name)
+            block.input = {"path": session}
+            await adapter._process_assistant_message(
+                session,
+                _FakeAssistantMessage(content=[block]),
+            )
+        adapter._cleanup_session("first")
+        assert ("second", "shared") in adapter._tool_buf
+        await adapter._process_assistant_message(
+            "second", _FakeAssistantMessage(content=[_FakeToolResultBlock(tool_use_id="shared", content="result")])
+        )
+        events = []
+        while not adapter._queues["second"].empty():
+            events.append(adapter._queues["second"].get_nowait())
+        completed = [event for event in events if event.kind == EventKind.tool_call_completed]
+        assert len(completed) == 1
+        assert completed[0].payload["tool_name"] == "Grep"
+        assert completed[0].payload["arguments"]["path"] == "second"
+
     @pytest.mark.asyncio
     async def test_tool_result_records_telemetry_with_job(self) -> None:
         adapter = ClaudeAdapter()
@@ -1352,7 +1784,7 @@ class TestToolResultTelemetry:
         adapter._queues[sid] = asyncio.Queue()
         adapter._session_to_job[sid] = "job-1"
         adapter._schedule_db_write = lambda coro: coro.close()
-        adapter._tool_buf["tool-1"] = {
+        adapter._tool_buf[sid, "tool-1"] = {
             "job_id": "job-1",
             "tool_name": "Bash",
             "arguments": None,

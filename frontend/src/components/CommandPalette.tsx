@@ -108,7 +108,7 @@ export function CommandPalette() {
         keywords: ["project", "projects", "repo", "repository", "memory", "wisdom", "health", "git"],
       },
       // Context-aware terminal entries: show job terminal first when inside a job view
-      ...(currentJob?.worktreePath && !currentJob?.archivedAt && currentJobId
+      ...(currentJob?.worktreePath && !currentJob?.observationOnly && !currentJob?.archivedAt && currentJobId
         ? [
             {
               id: "terminal-job",
@@ -141,10 +141,10 @@ export function CommandPalette() {
       jobs.map((job) => ({
         id: `job-${job.id}`,
         label: job.title || job.id,
-        description: `${job.state} · ${job.repo}`,
+        description: `${job.observationOnly ? "Observation" : job.state} · ${job.repo ?? "External observation"}`,
         icon: <ArrowRight className="h-4 w-4" />,
         action: () => navigate(`/jobs/${job.id}`),
-        keywords: [job.id, job.repo, job.state, job.branch ?? "", job.prompt],
+        keywords: [job.id, job.repo ?? "", job.state, job.branch ?? "", job.prompt],
       })),
     [jobs, navigate],
   );

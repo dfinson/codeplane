@@ -1,0 +1,1 @@
+{"event_kind": "part_start", "index": 0, "part": {"args": "", "id": "fc_098bca4a636ea953006a40e53d033c819691fcf6cc83f4364a", "part_kind": "tool-call", "provider_details": null, "provider_name": "openai", "tool_call_id": "call_t3e27SIi4IRDNCyBXBGbWwsZ", "tool_kind": null, "tool_name": "read_file"}, "previous_part_kind": null}

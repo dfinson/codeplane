@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -26,6 +26,7 @@ from backend.models.domain import (
     validate_state_transition,
 )
 from backend.services.adapters.agent_adapter import validate_sdk_model
+from backend.services.adapters.integration_policy import IntegrationPolicy
 from backend.services.completers.naming_service import NamingError
 from backend.services.git.git_service import GitError
 from backend.services.project.repo_membership import normalize_repo_path
@@ -43,6 +44,7 @@ if TYPE_CHECKING:
     from backend.services.events.event_bus import EventBus
     from backend.services.git.git_service import GitService
     from backend.services.merge_service import MergeService
+    from backend.services.recipe.run_service import RecipeRunService
 
 log = structlog.get_logger()
 
@@ -68,6 +70,7 @@ class JobService:
         event_bus: EventBus | None = None,
         project_repo: ProjectRepository | None = None,
         credential_repo: CredentialRepository | None = None,
+        recipe_runs: RecipeRunService | None = None,
     ) -> None:
         self._job_repo = job_repo
         self._git = git_service
@@ -77,6 +80,7 @@ class JobService:
         self._event_bus = event_bus
         self._project_repo = project_repo
         self._credential_repo = credential_repo
+        self._recipe_runs = recipe_runs
 
     @classmethod
     def from_session(
@@ -93,6 +97,10 @@ class JobService:
         from backend.persistence.event_repo import EventRepository
         from backend.persistence.job_repo import JobRepository
         from backend.persistence.project_repo import ProjectRepository
+        from backend.persistence.recipe_repo import RecipeRepository
+        from backend.persistence.recipe_run_repo import RecipeRunRepository
+        from backend.services.recipe.definition_service import RecipeDefinitionService
+        from backend.services.recipe.run_service import RecipeRunService
 
         job_repo = JobRepository(session)
         event_repo = EventRepository(session)
@@ -110,6 +118,9 @@ class JobService:
             event_bus=event_bus,
             project_repo=project_repo,
             credential_repo=CredentialRepository(session),
+            recipe_runs=RecipeRunService(
+                RecipeDefinitionService(RecipeRepository(session)), RecipeRunRepository(session)
+            ),
         )
 
     async def validate_repo_async(self, repo: str) -> str:
@@ -254,7 +265,7 @@ class JobService:
 
         return title, description, branch, worktree_name
 
-    async def enrich_naming_async(self, job_id: str, spec: JobSpec, resolved_repo: str) -> None:
+    async def enrich_naming_async(self, job_id: str, spec: JobSpec, resolved_repo: str) -> SessionEvent | None:
         """Background LLM naming enrichment: fills in title/description after creation.
 
         Runs after `create_job` has already returned using the instant
@@ -263,10 +274,10 @@ class JobService:
         changing them post-hoc would desync the DB from git reality.
         """
         if self._naming is None:
-            return
+            return None
         job = await self._job_repo.get(job_id)
         if job is None or job.title is not None:
-            return
+            return None
         try:
             existing_branches = await self._git.list_branches(resolved_repo) if self._git else set()
             existing_worktrees = await self._list_worktree_names(resolved_repo)
@@ -279,54 +290,60 @@ class JobService:
             )
         except NamingError as exc:
             log.warning("naming_enrichment_failed", job_id=job_id, error=str(exc))
-            return
+            return None
 
         job = await self._job_repo.get(job_id)
         if job is None:
-            return
+            return None
         await self._job_repo.update_title_and_branch(job_id, title=title, description=description)
 
-        if self._event_bus is not None:
-            from backend.models.events import EventKind, new_event
+        from backend.models.events import EventKind, new_event
 
-            await self._event_bus.publish(
-                new_event(
-                    session_id=job_id,
-                    timestamp=datetime.now(UTC),
-                    kind=EventKind.job_title_updated,
-                    payload={"title": title, "description": description},
-                )
-            )
         log.info("naming_enrichment_complete", job_id=job_id, title=title)
+        return new_event(
+            session_id=job_id,
+            timestamp=datetime.now(UTC),
+            kind=EventKind.job_title_updated,
+            payload={"title": title, "description": description},
+        )
 
     async def create_job(self, spec: JobSpec) -> Job:
-        """Create a new job record in ``preparing`` state.
+        """Prepare and persist a new Job, retaining caller-owned commit behavior.
 
-        Performs naming (LLM or pre-computed) and persists the job row, but
-        does **not** create the worktree or start the agent.  Call
-        :meth:`setup_workspace` in a background task to complete preparation.
-
-        The job ID is an instant, heuristically-derived worktree name (e.g.
-        "fix-login-bug") computed locally with no LLM call, so job creation
-        never blocks on naming. If a naming service is configured, call
-        :meth:`enrich_naming_async` in a background task afterwards to fill
-        in the real title/description via the LLM.
-
-        Returns the created Job domain object.
-
-        Raises:
-            RepoNotAllowedError: if the repo is not in the allowlist.
-            ServiceInitError: if GitService was not injected.
-            SDKModelMismatchError: if the requested model is incompatible
-                with the resolved SDK.
+        No workspace or agent is created here. Non-task callers retain their
+        public creation contract; task execution uses the two phases with a
+        closed read session between preparation and its attachment transaction.
         """
+        selection = None
+        if spec.recipe is not None:
+            if self._recipe_runs is None:
+                raise ServiceInitError("Recipe admission is unavailable.")
+            selection = await self._recipe_runs.prepare_job_selection(spec.recipe, spec.prompt)
+        job = await self.persist_prepared_job(
+            await self.prepare_job(spec),
+            revalidate_project=False,
+            recipe_admission=selection is not None,
+        )
+        if selection is not None:
+            assert self._recipe_runs is not None
+            await self._recipe_runs.admit_job(job.id, *selection)
+        return job
+
+    async def prepare_job(self, spec: JobSpec) -> Job:
+        """Read-only Git, ownership, SDK and naming preflight; never insert a row.
+
+        The returned domain object is not an accepted Job until persisted.
+        Naming failures retain the existing failed-Job representation.
+        """
+        policy = IntegrationPolicy(self._config)
+        resolved_sdk = policy.require_enabled(spec.sdk or policy.default_sdk).value
+        validate_sdk_model(resolved_sdk, spec.model)
         resolved_repo = await self.validate_repo_async(spec.repo)
         project_id = await self._resolve_job_project_id(resolved_repo, spec.project_id)
 
         if self._git is None:
             raise ServiceInitError("GitService required for job creation")
 
-        resolved_sdk = spec.sdk or self._config.runtime.default_sdk
         credential_label = None
         if spec.copilot_credential_id is not None:
             from backend.services.inference_account import InferenceAccountError, validate_copilot_credential
@@ -336,9 +353,6 @@ class JobService:
             credential_label = await validate_copilot_credential(
                 self._credential_repo, spec.copilot_credential_id, resolved_sdk
             )
-
-        # Validate SDK-model compatibility upfront
-        validate_sdk_model(resolved_sdk, spec.model)
 
         # Determine base_ref
         base_ref = spec.base_ref
@@ -354,7 +368,8 @@ class JobService:
 
             h = hashlib.sha256(f"{spec.prompt}{now.isoformat()}".encode()).hexdigest()[:12]
             job_id = f"naming-failed-{h}"
-            job = Job(
+            log.error("job_naming_failed", job_id=job_id, error=str(exc))
+            return Job(
                 id=job_id,
                 repo=resolved_repo,
                 prompt=spec.prompt,
@@ -378,41 +393,21 @@ class JobService:
                 failure_reason=f"Naming failed: {exc}",
                 parent_job_id=spec.parent_job_id,
             )
-            await self._job_repo.create(job)
-            log.error("job_naming_failed", job_id=job_id, error=str(exc))
-            return job
 
         assert worktree_name is not None
-        job_id = worktree_name
-
-        # Final collision guard (covers both naming paths).
-        # If after all retries the name still collides, append a numeric suffix.
-        if await self._job_repo.get(job_id) is not None:
-            existing_ids = await self._job_repo.list_ids()
-            counter = 2
-            while f"{job_id}-{counter}" in existing_ids:
-                counter += 1
-            job_id = f"{job_id}-{counter}"
-            worktree_name = job_id
-            log.warning("naming_collision_suffixed", job_id=job_id)
         log.info(
             "naming_preflight_complete",
-            job_id=job_id,
+            job_id=worktree_name,
             title=title,
             branch=branch,
             worktree_name=worktree_name,
         )
-
-        # Persist in ``preparing`` state — worktree is created asynchronously
-        # by the background setup task.
-        initial_state = JobState.preparing
-
-        job = Job(
-            id=job_id,
+        return Job(
+            id=worktree_name,
             repo=resolved_repo,
             prompt=spec.prompt,
             project_id=project_id,
-            state=initial_state,
+            state=JobState.preparing,
             base_ref=base_ref,
             branch=branch,
             worktree_path=None,
@@ -437,8 +432,54 @@ class JobService:
             parent_job_id=spec.parent_job_id,
             mode=spec.mode,
         )
+
+    async def persist_prepared_job(
+        self,
+        prepared: Job,
+        *,
+        revalidate_project: bool = True,
+        align_generated_branch: bool = False,
+        recipe_admission: bool = False,
+    ) -> Job:
+        """Insert a prepared Job with a final DB name check, without Git or commit.
+
+        Task callers must hold their short serialized attachment transaction.
+        Non-task create_job callers retain their existing transaction ownership.
+        ``align_generated_branch`` is for task-generated ``feat/<slug>`` names;
+        explicitly supplied non-task branches retain their existing behavior.
+        ``recipe_admission`` is explicit because the run is inserted later in
+        this transaction; temporary run absence must not select a legacy pin.
+        """
+        if revalidate_project:
+            await self._resolve_job_project_id(prepared.execution_repo, prepared.project_id)
+        job = prepared
+        if await self._job_repo.get(job.id) is not None:
+            existing_ids = await self._job_repo.list_ids()
+            counter = 2
+            while f"{prepared.id}-{counter}" in existing_ids:
+                counter += 1
+            job_id = f"{prepared.id}-{counter}"
+            branch = prepared.branch
+            if align_generated_branch and branch == f"feat/{prepared.id}":
+                branch = f"feat/{job_id}"
+            job = replace(
+                prepared,
+                id=job_id,
+                worktree_name=job_id if prepared.worktree_name is not None else None,
+                branch=branch,
+            )
+            log.warning("naming_collision_suffixed", job_id=job_id)
         await self._job_repo.create(job)
-        log.info("job_created", job_id=job_id, title=title, repo=resolved_repo, state=initial_state)
+        if not recipe_admission:
+            await self._job_repo.declare_initial_legacy_admission(job.id)
+        log.info(
+            "job_created",
+            job_id=job.id,
+            title=job.title,
+            repo=job.repo,
+            state=job.state,
+            recipe_admission=recipe_admission,
+        )
         return job
 
     async def setup_workspace(self, job_id: str) -> Job:
@@ -461,6 +502,7 @@ class JobService:
             raise JobNotFoundError(f"Job {job_id} does not exist.")
         if job.state != JobState.preparing:
             raise StateConflictError(f"Job {job_id} is in state {job.state!r}, expected 'preparing'.")
+        repo_path, base_ref = job.execution_repo, job.execution_base_ref
 
         async def _emit_progress(step: str) -> None:
             if self._event_bus is not None:
@@ -477,9 +519,9 @@ class JobService:
 
         try:
             worktree_path, branch_name = await self._git.create_worktree(
-                repo_path=job.repo,
+                repo_path=repo_path,
                 job_id=job.worktree_name or job_id,
-                base_ref=job.base_ref,
+                base_ref=base_ref,
                 branch=job.branch,
             )
         except GitError as exc:
@@ -493,11 +535,17 @@ class JobService:
                 raise JobNotFoundError(f"Job {job_id} disappeared after state update") from exc
             return job
 
+        current = await self._job_repo.get(job_id)
+        if current is None:
+            raise JobNotFoundError(f"Job {job_id} disappeared during workspace creation")
+        if current.state != JobState.preparing:
+            await self._job_repo.update_worktree(job_id, worktree_path, branch_name)
+            return current
+
         # Update the job with worktree info and transition to queued
         now = datetime.now(UTC)
-        await self._job_repo.update_worktree(job_id, worktree_path, branch_name)
-        validate_state_transition(JobState.preparing, JobState.queued)
-        await self._job_repo.update_state(job_id, JobState.queued, now)
+        if not await self._job_repo.finish_workspace_setup(job_id, worktree_path, branch_name, now):
+            await self._job_repo.update_worktree(job_id, worktree_path, branch_name)
 
         log.info("job_workspace_ready", job_id=job_id, worktree_path=worktree_path, branch=branch_name)
 
@@ -601,9 +649,9 @@ class JobService:
         original = await self.get_job(job_id)
         return await self.create_job(
             JobSpec(
-                repo=original.repo,
+                repo=original.execution_repo,
                 prompt=original.prompt,
-                base_ref=original.base_ref,
+                base_ref=original.execution_base_ref,
                 preset=original.preset,
                 model=original.model,
                 sdk=original.sdk,
@@ -792,11 +840,11 @@ class JobService:
 
         # Clean up worktree and branch immediately rather than waiting for
         # the daily retention sweep — the UI promises this happens on archive.
-        if self._git and job.worktree_path and job.worktree_path != job.repo:
+        if self._git and not job.observation_only and job.worktree_path and job.worktree_path != job.repo:
             # (only for abandoned jobs — merged jobs are handled by merge_index)
 
             try:
-                await self._git.remove_worktree(job.repo, job.worktree_path)
+                await self._git.remove_worktree(job.execution_repo, job.worktree_path)
                 log.info("archive_worktree_removed", job_id=job_id, worktree=job.worktree_path)
             except (GitError, OSError):
                 log.warning("archive_worktree_cleanup_failed", job_id=job_id, exc_info=True)

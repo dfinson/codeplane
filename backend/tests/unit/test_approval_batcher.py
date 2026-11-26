@@ -5,8 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from unittest.mock import AsyncMock
 
-from traceforge.governance import RecommendedAction
-
 from backend.services.action_policy.batcher import (
     ApprovalBatcher,
     Batch,
@@ -14,6 +12,7 @@ from backend.services.action_policy.batcher import (
     GateAction,
     _action_description,
 )
+from backend.services.action_policy.classifier import RecommendedAction
 
 
 @dataclass

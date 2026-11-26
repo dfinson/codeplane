@@ -5,6 +5,71 @@ hide:
 
 # Usage Guide
 
+## Copilot-only operation
+
+`runtime.copilot_only` defaults to `true`. CodePlane admits GitHub Copilot
+execution, including models from other providers that Copilot serves. It keeps
+other adapters and their historical jobs. Set the flag to `false` in the
+CodePlane configuration to re-enable them. A stored non-Copilot default is
+preserved while the effective default is Copilot.
+
+Disabled integrations cannot create, resume or recover execution. History
+remains readable. Startup records a specific failure for an in-flight managed
+job whose integration is disabled. Normal operator terminals remain shells,
+not provider sandboxes.
+
+Scout remains a governed full-session context brief before primary execution.
+It is distinct from text-only naming, narration and Chat completion. Discussion
+Chats cannot use tools and do not create a workspace.
+
+Native discovery stays within registered repositories and sessions created after observation starts. It follows the latest valid steering marker, including later enable/disable changes. Already imported sessions recover from their saved checkpoints.
+
+Native history and checkpoints retain the local session ID. Ordinary steering uses the separate published task ID from that session's owned metadata. Missing, mismatched or disabled bindings deny control without guessing a target or changing the local identity.
+
+Native observation honors process-scoped `COPILOT_HOME`. If native source
+history or its mapping changed, observation stops with a recorded diagnostic
+instead of silently reinterpreting accepted progress. A steering receipt means
+admission, not proof the agent executed the instruction. An uncertain delivery
+must not be retried automatically.
+
+Cloud task existence, cached flags and HTTP errors prove neither a live CLI execution nor its termination. The current native integration has no authoritative live-identity signal, so strict coordinated dispatch withholds a token and fails closed. Ordinary operator-requested relay admission remains separate from that stricter guarantee.
+
+Verification results distinguish completed, failed and interrupted agent
+verification turns. A completed turn is not evidence that tests passed.
+Review remains the operator's decision state.
+
+## Runtime homes and generated artifacts
+
+Set `CODEPLANE_HOME` before starting an isolated runtime. Generated artifacts
+and subsequent updates use that home's `artifacts` directory, alongside its
+database, rather than the operator's ordinary artifact store.
+
+Existing records under the known default `~/.codeplane/artifacts` store remain
+downloadable. An explicitly requested update writes the new content into the
+active store and updates the same record's location and size. It leaves the
+old file untouched. CodePlane does not bulk-migrate historical files or trust
+arbitrary persisted paths.
+
+Session-document collection honors an explicit collector directory first,
+then `COPILOT_HOME`, then the ordinary `~/.copilot` default. For an isolated
+Copilot journey, set both home variables to owned fixture directories.
+
+## Restarting an Access-only development server
+
+Run `uv run --no-sync python tools\dev_restart.py` from the intended checkout.
+The existing Cloudflare operator login must already have cached an application
+JWT for the recorded tunnel origin. CodePlane retrieves that cached token
+privately; it does not launch a login flow. If the cache is missing or invalid,
+complete operator login separately and retry. Never place the JWT in command
+arguments, environment variables, configuration or request files.
+
+Preparation finishes before the adoption timer starts. The helper authenticates
+against the old server before reporting adoption, and waits for a separate
+parent commit before pausing jobs. Parent death or a closed/invalid channel
+before commit leaves the server untouched. Once committed, restart continues
+in the detached helper even if the initiating process exits. The replacement
+retains `--access-only`; local and password restart modes are unchanged.
+
 ## Creating Jobs
 
 Jobs are the core unit of work. Each job runs an agent against a repository in an isolated Git worktree.
@@ -67,7 +132,7 @@ Token usage with input/output/cache breakdown, estimated cost with live cost bad
 
 ## Action Policy
 
-When an agent attempts an action, CodePlane classifies it and delegates the decision to TraceForge governance, which recommends whether to allow it, proceed with a savepoint, or gate it for your approval.
+When an agent attempts an action, CodePlane combines bounded semantic assessment with authoritative local facts and evaluates its standalone AGT policy. Unknown evidence cannot become automatic permission.
 
 ### Presets
 
@@ -75,22 +140,21 @@ Every job runs under a **preset** that controls how aggressively actions are gat
 
 | Preset | Behavior |
 |--------|----------|
-| **`autonomous`** | Only non-contained actions (external calls, operations outside the worktree) require approval. Everything else proceeds immediately. |
-| **`supervised`** | Default. Contained and reversible actions proceed; anything non-contained or irreversible requires approval. |
-| **`locked`** | Even contained, reversible actions create a git checkpoint before proceeding. Non-contained or irreversible actions require approval. |
+| **`autonomous`** | Known reads and fully evidenced Git-recoverable workspace mutations may proceed. Hard gates and incomplete evidence require explicit decisions. |
+| **`supervised`** | Default. Fully evidenced Git-recoverable workspace mutations require a savepoint. External mutations and incomplete evidence are gated. |
+| **`locked`** | Known shell reads require a savepoint. Mutations require approval. Trusted contained native reads remain read-only. |
 
 Set the preset globally via **Settings → Policy**, per-job in the creation form, or via the API (`PUT /api/settings/policy/preset`).
 
 ### Recommended Actions
 
-TraceForge governance returns a **recommended action** for each classified action, surfaced as a badge:
+The standalone policy returns a **recommended action**, surfaced as a badge:
 
 | Action | Symbol | Behavior |
 |--------|--------|----------|
 | **allow** | ○ | Proceeds immediately — no interruption |
 | **warn** | ◐ | Creates a git savepoint, then proceeds (rollback available) |
-| **transform** | ◐ | Advisory change suggested; proceeds with a savepoint |
-| **escalate** | ● | Sent for review (LLM monitor, if enabled) before continuing |
+| **escalate** | ● | Sent for review before continuing |
 | **deny** | ● | Blocks execution until you approve or reject |
 
 ### Approval Actions
@@ -99,17 +163,17 @@ TraceForge governance returns a **recommended action** for each classified actio
 |--------|--------|
 | **Approve** | Allow this specific action |
 | **Reject** | Block it — the agent may try an alternative |
-| **Trust Session** | Auto-approve all remaining actions for this job |
+| **Historical session trust** | Retained for transition recovery, not a waiver in the final runtime |
 
 ### Overrides
 
-Beyond the preset, **Settings → Policy** exposes the controls CodePlane layers on top of the governance profile:
+Beyond the preset, **Settings → Policy** shows current controls and thresholds:
 
-- **Per-preset USD ceilings** — escalate oversight once a job's spend crosses a dollar threshold
-- **Approval batch window** — how long consecutive gated actions are grouped into a single prompt
+- **Approval batch window** - group concurrent routine actions needing operator review
+- **Verified-USD thresholds** - editable warning/escalation lines, never applied to native cost units or missing currency. Blank disables a line and zero takes effect immediately.
 - **MCP server configs** — per-server launch configuration for MCP tools
 
-The underlying decision rules — protected paths, effect budget, and reason-code trust — are owned by the `traceforge.governance` profile selected by your preset. Changes take effect at runtime: running jobs reload policy automatically.
+Full approval of a routine batch grants its reasons for 24 hours within that Job and policy configuration. Partial approval releases only selected actions and does not create a grant. Mandatory security gates and incomplete evidence still require individual approval. See [transition recovery](transition-retirement.md) for old pinned executions and checkpoints.
 
 ### Hard-Gated Commands
 

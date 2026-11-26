@@ -127,7 +127,12 @@ async def get_job_diff(
     files: list[DiffFileModel] = []
 
     # For active jobs with a worktree, calculate a fresh diff
-    if job.state in (JobState.running, JobState.waiting_for_approval) and job.worktree_path:
+    if (
+        not job.observation_only
+        and job.state in (JobState.running, JobState.waiting_for_approval)
+        and job.worktree_path
+        and job.base_ref
+    ):
         try:
             files = await diff_service.calculate_diff(job.worktree_path, job.base_ref)
         except (GitError, OSError):
@@ -175,7 +180,12 @@ async def get_job_diff_file(
 
     file: DiffFileModel | None = None
 
-    if job.state in (JobState.running, JobState.waiting_for_approval) and job.worktree_path:
+    if (
+        not job.observation_only
+        and job.state in (JobState.running, JobState.waiting_for_approval)
+        and job.worktree_path
+        and job.base_ref
+    ):
         try:
             file = await diff_service.calculate_diff_single_file(job.worktree_path, job.base_ref, path)
         except (GitError, OSError):
@@ -231,14 +241,23 @@ async def get_job_transcript(
             timestamp=(p := event.payload).get("timestamp", event.timestamp),
             kind=str(event.kind),
             content=p.get("content", ""),
+            admission_status=p.get("admission_status"),
+            execution_status=p.get("execution_status"),
+            operator_content=p.get("operator_content"),
+            metadata=event.metadata,
+            pairing_status=p.get("_codeplane_pairing", {}).get("status"),
+            pairing_reason=p.get("_codeplane_pairing", {}).get("reason"),
             title=p.get("title"),
             turn_id=event.metadata.turn_id or p.get("turn_id"),
             tool_call_id=p.get("tool_call_id"),
             tool_name=p.get("tool_name"),
             arguments=_stringify_tool_args(p.get("arguments")),
-            result=p.get("result"),
-            success=p.get("success"),
-            tool_issue=p.get("tool_issue"),
+            result=_stringify_tool_args(p.get("result")),
+            success=False if event.kind == EventKind.tool_call_failed else p.get("success"),
+            tool_issue=_stringify_tool_args(
+                p.get("tool_issue")
+                or (p.get("error") or p.get("message") if event.kind == EventKind.tool_call_failed else None)
+            ),
             tool_intent=(event.metadata.motivation.intent if event.metadata.motivation else None),
             tool_title=p.get("tool_title"),
             tool_display=p.get("tool_display") or event.metadata.tool_display,
@@ -411,13 +430,7 @@ async def reenrich_job(
     session_factory: FromDishka[async_sessionmaker[AsyncSession]],
     force: bool = Query(default=False),
 ) -> dict[str, Any]:
-    """Re-enrich historical events for a job through TraceForge.
-
-    Replays all persisted events through a fresh TraceForge Enricher so
-    that classification, visibility, tool_display and other metadata are
-    backfilled.  Idempotent — a marker event prevents double processing
-    unless ``force=true``.
-    """
+    """Rebuild structural display/duration metadata without changing raw history or risk."""
     from backend.services.events.reenrich import reenrich_job_events
 
     updated = await reenrich_job_events(job_id, session_factory, force=force)
@@ -479,6 +492,7 @@ async def get_job_snapshot(
     from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepository
 
     ct = (await TelemetrySummaryRepository(session).batch_cost_tokens([job_id])).get(job_id, {})
+    usage = (await TelemetrySummaryRepository(session).batch_cost_usage([job_id])).get(job_id, [])
 
     return await assemble_snapshot(
         job=job,
@@ -495,6 +509,7 @@ async def get_job_snapshot(
             total_tokens=ct.get("total_tokens"),
             input_tokens=ct.get("input_tokens"),
             output_tokens=ct.get("output_tokens"),
+            cost_usage=usage,
         ),
         filter_transcript_deltas=True,
         detect_plan_generations=True,

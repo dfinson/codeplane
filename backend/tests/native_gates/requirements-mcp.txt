@@ -1,0 +1,4 @@
+mcp==1.27.1
+agent-governance-toolkit-core==5.0.0
+httpx==0.28.1
+jsonschema==4.26.0

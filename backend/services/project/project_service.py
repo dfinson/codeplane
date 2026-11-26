@@ -129,22 +129,16 @@ class ProjectService:
         """
         projects = await self._project_repo.list()
 
-        all_repo_paths = sorted({path for project in projects for path in project.repo_paths})
-        counts_by_repo = await self._project_repo.job_counts_by_repo(all_repo_paths)
+        counts_by_project = await self._project_repo.job_counts_by_project([project.id for project in projects])
 
         summaries: list[ProjectSummary] = []
         for project in projects:
             summary = ProjectSummary(id=project.id, name=project.name, repo_paths=project.repo_paths)
-            for repo_path in project.repo_paths:
-                bucket = counts_by_repo.get(repo_path)
-                if bucket is None:
-                    continue
-                summary.active_job_count += bucket.active
-                summary.awaiting_input_count += bucket.awaiting
-                summary.failed_count += bucket.failed
-                if summary.last_activity_at is None or (
-                    bucket.last_activity is not None and bucket.last_activity > summary.last_activity_at
-                ):
-                    summary.last_activity_at = bucket.last_activity
+            bucket = counts_by_project.get(project.id)
+            if bucket is not None:
+                summary.active_job_count = bucket.active
+                summary.awaiting_input_count = bucket.awaiting
+                summary.failed_count = bucket.failed
+                summary.last_activity_at = bucket.last_activity
             summaries.append(summary)
         return summaries

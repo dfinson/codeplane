@@ -4,6 +4,7 @@ import type {
   PeerMessageRequest,
   PeerMessageResponse,
   SessionDirectoryResponse,
+  SessionAgentDirectoryResponse,
 } from "./types";
 
 export function fetchSessionDirectory(jobId: string, offset = 0): Promise<SessionDirectoryResponse> {
@@ -12,6 +13,11 @@ export function fetchSessionDirectory(jobId: string, offset = 0): Promise<Sessio
 
 export function fetchPeerMessages(jobId: string, offset = 0): Promise<PeerMessageListResponse> {
   return request(`/jobs/${encodeURIComponent(jobId)}/peer-messages?offset=${offset}`);
+}
+
+export function fetchPeerAgents(jobId: string, targetJobId: string, cursor = ""): Promise<SessionAgentDirectoryResponse> {
+  const query = new URLSearchParams({ target_job_id: targetJobId, cursor });
+  return request(`/jobs/${encodeURIComponent(jobId)}/peer-agents?${query}`);
 }
 
 export function relayPeerMessage(jobId: string, body: PeerMessageRequest): Promise<PeerMessageResponse> {

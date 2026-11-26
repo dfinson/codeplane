@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import UTC
 
 from sqlalchemy import delete, func, select, update
-from traceforge.types import EventMetadata
 
 from backend.models.db import EventRow
 from backend.models.events import TRANSCRIPT_KINDS, EventKind, SessionEvent, new_event
+from backend.models.session_event import EventMetadata
 from backend.persistence.repository import BaseRepository
 
 
@@ -21,10 +22,30 @@ class StoredEvent:
     event: SessionEvent
 
 
+@dataclass(frozen=True, slots=True)
+class ObservationProjectionReference:
+    event_id: str
+    step_id: str | None
+    step_number: int | None
+    turn_id: str | None
+
+    @classmethod
+    def from_event(cls, event: SessionEvent) -> ObservationProjectionReference:
+        return cls(
+            event.id, event.payload.get("step_id"), event.payload.get("step_number"), event.payload.get("turn_id")
+        )
+
+
 class EventRepository(BaseRepository):
     """Raw event persistence. Direct consumers: RuntimeService, TrailService,
     RuntimeTelemetry (log lines). All other services must use
     TrailNodeRepository projections. See internal-docs/design/unified-trail-service.md §6."""
+
+    async def has_any_kind(self, job_id: str, kinds: tuple[str, ...]) -> bool:
+        result = await self._session.execute(
+            select(EventRow.id).where(EventRow.job_id == job_id, EventRow.kind.in_(kinds)).limit(1)
+        )
+        return result.first() is not None
 
     @staticmethod
     def _to_domain(row: EventRow) -> SessionEvent:
@@ -33,25 +54,106 @@ class EventRepository(BaseRepository):
         return new_event(
             event_id=row.event_id,
             session_id=row.job_id,
-            timestamp=row.timestamp,
-            kind=EventKind(row.kind),
+            timestamp=row.timestamp.replace(tzinfo=UTC) if row.timestamp.tzinfo is None else row.timestamp,
+            kind=row.kind,
             payload=json.loads(row.payload),
             metadata=metadata,
+            raw_event=json.loads(row.raw_event) if row.raw_event is not None else None,
         )
 
     async def append(self, event: SessionEvent) -> int:
         """Persist a domain event. Returns the autoincrement DB id."""
+        existing = await self._session.execute(select(EventRow).where(EventRow.event_id == event.id))
+        previous = existing.scalar_one_or_none()
+        if previous is not None:
+            self._verify_identity(previous, event)
+            return previous.id
         row = EventRow(
             event_id=event.id,
             job_id=event.session_id or None,
             kind=str(event.kind),
-            timestamp=event.timestamp,
+            timestamp=(
+                event.timestamp.replace(tzinfo=UTC)
+                if event.timestamp.tzinfo is None
+                else event.timestamp.astimezone(UTC)
+            ),
             payload=json.dumps(dict(event.payload)),
             event_metadata=json.dumps(event.metadata.model_dump(mode="json")),
+            raw_event=json.dumps(event.raw_event) if event.raw_event is not None else None,
         )
         self._session.add(row)
         await self._session.flush()
         return row.id
+
+    @staticmethod
+    def _verify_identity(row: EventRow, event: SessionEvent) -> None:
+        previous = json.loads(row.payload)
+        source = event.payload.get("_codeplane_source")
+        same = previous.get("_codeplane_source") == source if source else previous == dict(event.payload)
+        raw_matches = row.raw_event is None or json.loads(row.raw_event) == event.raw_event
+        if row.job_id != event.session_id or row.kind != str(event.kind) or not same or not raw_matches:
+            raise ValueError(f"Conflicting content for event identity {event.id}")
+
+    async def contains(self, event: SessionEvent) -> bool:
+        result = await self._session.execute(select(EventRow).where(EventRow.event_id == event.id))
+        row = result.scalar_one_or_none()
+        if row is None:
+            return False
+        self._verify_identity(row, event)
+        return True
+
+    async def count_native_events(self, job_id: str, framework: str, external_session_id: str) -> int:
+        """Count durable projected source events, not physical records or SSE cursors."""
+        result = await self._session.execute(
+            select(func.count())
+            .select_from(EventRow)
+            .where(
+                EventRow.job_id == job_id,
+                func.json_extract(EventRow.payload, "$._codeplane_source.framework") == framework,
+                func.json_extract(EventRow.payload, "$._codeplane_source.session_id") == external_session_id,
+            )
+        )
+        return int(result.scalar_one())
+
+    async def get(self, event_id: str) -> SessionEvent | None:
+        result = await self._session.execute(select(EventRow).where(EventRow.event_id == event_id))
+        row = result.scalar_one_or_none()
+        return self._to_domain(row) if row is not None else None
+
+    async def first_observed_completions(
+        self, job_id: str, binding_id: str, operation_ids: list[str]
+    ) -> dict[str, ObservationProjectionReference]:
+        """Bounded lookups over retained canonical history, not a lifetime-sized cache."""
+        found = {}
+        operation = func.json_extract(EventRow.payload, "$._codeplane_observation.operation_id")
+        for offset in range(0, len(operation_ids), 128):
+            first = (
+                select(func.min(EventRow.id))
+                .where(
+                    EventRow.job_id == job_id,
+                    EventRow.kind.in_((EventKind.tool_call_completed.value, EventKind.tool_call_failed.value)),
+                    func.json_extract(EventRow.event_metadata, "$.integration_binding_id") == binding_id,
+                    operation.in_(operation_ids[offset : offset + 128]),
+                )
+                .group_by(operation)
+            )
+            rows = await self._session.execute(
+                select(
+                    EventRow.event_id,
+                    operation.label("operation"),
+                    func.json_extract(EventRow.payload, "$.step_id").label("step_id"),
+                    func.json_extract(EventRow.payload, "$.step_number").label("step_number"),
+                    func.json_extract(EventRow.payload, "$.turn_id").label("turn_id"),
+                ).where(EventRow.id.in_(first))
+            )
+            for row in rows.mappings():
+                found[row["operation"]] = ObservationProjectionReference(
+                    row["event_id"],
+                    row["step_id"],
+                    row["step_number"],
+                    row["turn_id"],
+                )
+        return found
 
     async def list_after(
         self,

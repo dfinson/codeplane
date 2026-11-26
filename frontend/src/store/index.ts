@@ -11,11 +11,12 @@ import { create } from "zustand";
 // Types — re-exported from ./types for backward compatibility.
 // ---------------------------------------------------------------------------
 
-import { fetchSDKs, fetchModels, createTerminalSession as apiCreateTerminalSession, deleteTerminalSession as apiDeleteTerminalSession } from "../api/client";
-import { sseHandlers, enrichJob } from "./sseHandlers";
+import { fetchSDKs, fetchModels, fetchTrackerOperations, createTerminalSession as apiCreateTerminalSession, deleteTerminalSession as apiDeleteTerminalSession } from "../api/client";
+import { sseHandlers, enrichJob, mergeTrackerOperations } from "./sseHandlers";
 export { enrichJob } from "./sseHandlers";
 import { deriveJobStateFrame } from "./sseNormalize";
 import { pathBasename } from "../lib/paths";
+import { removePairedToolStarts } from "../lib/transcriptIdentity";
 
 // Re-export all types so existing `import { ... } from "../store"` still works
 export type {
@@ -39,6 +40,9 @@ export type {
 
 // Re-export all selectors
 export {
+  selectTrackerOperations,
+  selectTrackerOperationsForProject,
+  selectTrackerOperationLoad,
   selectJobs,
   selectConnectionStatus,
   selectReconnectAttempt,
@@ -327,6 +331,25 @@ export function _resetSdkInitForTesting() {
 }
 
 export const useStore = create<AppState>((set, get) => ({
+  jobPendingDecisionPages: {},
+  reviewPreparations: {},
+  reviewHistoryPages: {},
+  recipeAttemptControls: {},
+  projectBoards: {},
+  projectBoardPages: {},
+  projectApprovalPages: {},
+  projectDeliveryPages: {},
+  projectBoardVersion: 0,
+  taskLinkInspections: {},
+  recipeCurrentRuns: {},
+  recipeRuns: {},
+  recipeRunHistoryPages: {},
+  recipeStepPages: {},
+  recipeStepInspections: {},
+  recipeAttemptInspections: {},
+  recipeVersions: {},
+  trackerOperations: {},
+  trackerOperationLoads: {},
   jobs: {},
   approvals: {},
   batchApprovals: {},
@@ -368,6 +391,54 @@ export const useStore = create<AppState>((set, get) => ({
     get().connectionStatus !== status && set({ connectionStatus: status }),
 
   setReconnectAttempt: (attempt) => set({ reconnectAttempt: attempt }),
+
+  hydrateTrackerOperations: (operations) => set((state) => {
+    const trackerOperations = mergeTrackerOperations(state.trackerOperations, operations);
+    return trackerOperations === state.trackerOperations ? state : { trackerOperations };
+  }),
+
+  loadTrackerOperations: async (projectId) => {
+    const previous = get().trackerOperationLoads[projectId];
+    const requestVersion = (previous?.requestVersion ?? 0) + 1;
+    set((state) => ({
+      trackerOperationLoads: {
+        ...state.trackerOperationLoads,
+        [projectId]: { loading: true, loaded: previous?.loaded ?? false, error: null, requestVersion },
+      },
+    }));
+    try {
+      const response = await fetchTrackerOperations(projectId);
+      // Do not remove absent rows: a list may predate an SSE event or a retry.
+      get().hydrateTrackerOperations(response.items.filter((operation) => operation.projectRef === projectId));
+      set((state) => state.trackerOperationLoads[projectId]?.requestVersion !== requestVersion ? state : ({
+        trackerOperationLoads: {
+          ...state.trackerOperationLoads,
+          [projectId]: { loading: false, loaded: true, error: null, requestVersion },
+        },
+      }));
+    } catch (error) {
+      set((state) => state.trackerOperationLoads[projectId]?.requestVersion !== requestVersion ? state : ({
+        trackerOperationLoads: {
+          ...state.trackerOperationLoads,
+          [projectId]: {
+            loading: false,
+            loaded: state.trackerOperationLoads[projectId]?.loaded ?? false,
+            error: error instanceof Error ? error.message : String(error),
+            requestVersion,
+          },
+        },
+      }));
+    }
+  },
+
+  refreshTrackerOperations: async () => {
+    const state = get();
+    const projectRefs = new Set([
+      ...Object.keys(state.trackerOperationLoads),
+      ...Object.values(state.trackerOperations).map((operation) => operation.projectRef),
+    ]);
+    await Promise.all([...projectRefs].map((projectRef) => get().loadTrackerOperations(projectRef)));
+  },
 
   initSdksAndModels: async () => {
     // No-op if already done (success or failure)
@@ -470,17 +541,7 @@ export const useStore = create<AppState>((set, get) => ({
       // completed tool_call — both are persisted but only one should render.
       // Use turnId-scoped keys when available to avoid false-positive removal
       // of in-flight tool_running entries for the same tool name.
-      const completedCallKeys = new Set<string>();
-      for (const e of snapshot.transcript) {
-        if (e.kind === "tool.call.completed" && e.toolName) {
-          completedCallKeys.add(e.turnId ? `${e.toolName}::${e.turnId}` : e.toolName);
-        }
-      }
-      const deduped = snapshot.transcript.filter((e) => {
-        if (e.kind !== "tool.call.started" || !e.toolName) return true;
-        const key = e.turnId ? `${e.toolName}::${e.turnId}` : e.toolName;
-        return !completedCallKeys.has(key);
-      });
+      const deduped = removePairedToolStarts(snapshot.transcript);
       const hydratedJob = currentJob ? { ...currentJob, ...incomingJob } : incomingJob;
       return {
         ...evictedState,
@@ -539,6 +600,16 @@ export const useStore = create<AppState>((set, get) => ({
 
   dispatchSSEEvent: (eventType, data) => {
     const payload = data as Record<string, unknown>;
+    if (
+      typeof payload.jobId === "string" && typeof payload.attemptId === "string" &&
+      ["message.user", "permission.requested", "permission.resolved"].includes(eventType)
+    ) {
+      const jobId = payload.jobId;
+      set((state) => ({ recipeVersions: { ...state.recipeVersions, [jobId]: (state.recipeVersions[jobId] ?? 0) + 1 } }));
+    }
+    if (/^(job|recipe|permission|tracker)\./.test(eventType)) {
+      set((state) => ({ projectBoardVersion: state.projectBoardVersion + 1 }));
+    }
 
     // `snapshot` is a passthrough camelCase frame (not a traceforge event) and
     // never drives a derived state transition.

@@ -2,19 +2,49 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
-from traceforge.types import EventMetadata, ToolMotivation
+import pytest
 
+from backend.models.domain import Approval, ApprovalResolution
 from backend.models.events import EventKind
+from backend.models.session_event import EventMetadata, ToolMotivation
 from backend.services.artifacts.snapshot_helpers import (
     _apply_reassignments,
+    _build_approvals,
     _build_logs,
     _build_timeline,
     _build_transcript,
     _build_turn_summaries,
 )
+
+
+@pytest.mark.parametrize("resolution", [None, ApprovalResolution.approved, ApprovalResolution.rejected])
+@pytest.mark.parametrize("explicit", [True, False])
+async def test_snapshot_preserves_explicit_approval_marker_and_notes(
+    resolution: ApprovalResolution | None, explicit: bool
+) -> None:
+    now = datetime.now(UTC)
+    approval = Approval(
+        id="hard-gate",
+        job_id="job-1",
+        description="Fixture hard gate",
+        proposed_action="fixture",
+        requested_at=now,
+        resolved_at=now if resolution else None,
+        resolution=resolution,
+        requires_explicit_approval=explicit,
+        notes="Recorded restart supersession" if resolution else None,
+    )
+    repository = AsyncMock()
+    repository.list_for_job.return_value = [approval]
+    snapshot = await _build_approvals(repository, "job-1")
+    wire = snapshot[0].model_dump(mode="json", by_alias=True)
+    assert wire["requiresExplicitApproval"] is explicit
+    assert wire["notes"] == approval.notes
 
 
 def _event(
@@ -73,6 +103,29 @@ class TestBuildLogs:
 
 
 class TestBuildTranscript:
+    def test_failed_tool_keeps_scope_identity_and_error_even_when_normally_hidden(self) -> None:
+        metadata = EventMetadata(
+            integration_binding_id="binding",
+            run_id="source",
+            namespace=("observation-source", "events"),
+        )
+        failure = _event(
+            kind=EventKind.tool_call_failed,
+            tool_name="report_intent",
+            tool_call_id="call",
+            error={"message": "Denied"},
+            result={"detail": "No execution proof"},
+            metadata=metadata,
+        )
+        transcript = _build_transcript([failure], [], None, None, filter_deltas=True)
+        assert len(transcript) == 1
+        assert transcript[0].kind == "tool.call.failed"
+        assert transcript[0].success is False
+        assert transcript[0].tool_call_id == "call"
+        assert transcript[0].metadata == metadata
+        assert transcript[0].tool_issue == '{"message": "Denied"}'
+        assert transcript[0].result == '{"detail": "No execution proof"}'
+
     def test_preserves_canonical_event_identity_and_optional_sequence(self) -> None:
         sequenced = _event(
             event_id="evt-sequenced",

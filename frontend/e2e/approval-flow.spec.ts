@@ -6,7 +6,7 @@
  */
 
 import { test, expect } from "@playwright/test";
-import { makeJob, sseBody, setupBaseMocks } from "./helpers";
+import { makeJob, mockLegacyRecipe, sseBody, setupBaseMocks } from "./helpers";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -37,6 +37,7 @@ async function setupApprovalMocks(
   approvals: unknown[] = [MOCK_APPROVAL],
 ) {
   await setupBaseMocks(page, [MOCK_JOB]);
+  await mockLegacyRecipe(page, MOCK_JOB.id);
 
   await page.route("**/api/jobs/job-1/snapshot*", async (route) => {
     await route.fulfill({
@@ -170,6 +171,7 @@ test.describe("Reject Action", () => {
 
 test.describe("SSE-Driven Approval Events", () => {
   test("approval_requested SSE event shows approval on job detail", async ({ page }) => {
+    await mockLegacyRecipe(page, MOCK_JOB.id);
     // SSE delivers an approval_requested event after the initial snapshot
     await page.route("**/api/events*", async (route) => {
       await route.fulfill({

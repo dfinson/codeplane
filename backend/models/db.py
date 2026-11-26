@@ -4,7 +4,20 @@ from __future__ import annotations
 
 from datetime import datetime  # noqa: TC003 - SQLAlchemy needs this at runtime for annotation eval
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # All DateTime columns use timezone=True so timestamps are stored
@@ -16,17 +29,230 @@ class Base(DeclarativeBase):
     pass
 
 
+class ShareTokenRow(Base):
+    __tablename__ = "share_tokens"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    job_id: Mapped[str] = mapped_column(String, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False, index=True)
+
+
+class RecipeDefinitionRow(Base):
+    __tablename__ = "recipe_definitions"
+
+    sequence: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    definition_json: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    latest_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+    __table_args__ = (CheckConstraint("version >= 1 AND latest_revision >= 0", name="ck_recipe_definition_version"),)
+
+
+class RecipeRevisionRow(Base):
+    __tablename__ = "recipe_revisions"
+
+    sequence: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    definition_id: Mapped[str] = mapped_column(String, ForeignKey("recipe_definitions.id"), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    definition_json: Mapped[str] = mapped_column(Text, nullable=False)
+    blocks_json: Mapped[str] = mapped_column(Text, nullable=False)
+    checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    published_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("definition_id", "revision", name="uq_recipe_revision_number"),
+        CheckConstraint("revision >= 1", name="ck_recipe_revision_number"),
+    )
+
+
+class RecipeRunRow(Base):
+    __tablename__ = "recipe_runs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    job_id: Mapped[str] = mapped_column(String, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False)
+    run_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    start_request_key: Mapped[str] = mapped_column(String, nullable=False)
+    continuation_of_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("recipe_runs.id", name="fk_recipe_run_continuation")
+    )
+    instruction: Mapped[str | None] = mapped_column(Text)
+    code_ref_json: Mapped[str | None] = mapped_column(Text)
+    reason: Mapped[str | None] = mapped_column(Text)
+    revision_id: Mapped[str] = mapped_column(String, ForeignKey("recipe_revisions.id"), nullable=False)
+    snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    snapshot_checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    inputs_json: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(String, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(TZDateTime)
+    completed_at: Mapped[datetime | None] = mapped_column(TZDateTime)
+    resolved_at: Mapped[datetime | None] = mapped_column(TZDateTime)
+
+    __table_args__ = (
+        UniqueConstraint("job_id", "run_number", name="uq_recipe_job_run_number"),
+        UniqueConstraint("start_request_key", name="uq_recipe_runs_start_request_key"),
+        CheckConstraint("run_number >= 1", name="ck_recipe_run_number"),
+        Index(
+            "uq_recipe_job_unresolved_run",
+            "job_id",
+            unique=True,
+            sqlite_where=text("resolved_at IS NULL"),
+        ),
+        CheckConstraint(
+            "state IN ('blocked','ready','running','needs_decision','succeeded',"
+            "'failed','skipped','canceled','interrupted')",
+            name="ck_recipe_run_state",
+        ),
+    )
+
+
+class RecipeStepInstanceRow(Base):
+    __tablename__ = "recipe_step_instances"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    run_id: Mapped[str] = mapped_column(String, ForeignKey("recipe_runs.id", ondelete="CASCADE"), nullable=False)
+    step_path: Mapped[str] = mapped_column(String, nullable=False)
+    definition_json: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(String, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    current_attempt_id: Mapped[str | None] = mapped_column(String)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("run_id", "step_path", name="uq_recipe_step_path"),
+        CheckConstraint(
+            "state IN ('blocked','ready','running','needs_decision','succeeded',"
+            "'failed','skipped','canceled','interrupted')",
+            name="ck_recipe_step_state",
+        ),
+    )
+
+
+class RecipeAttemptRow(Base):
+    """Dispatch identity and exact inputs are never overwritten by retry."""
+
+    __tablename__ = "recipe_attempts"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    step_instance_id: Mapped[str] = mapped_column(
+        String, ForeignKey("recipe_step_instances.id", ondelete="CASCADE"), nullable=False
+    )
+    number: Mapped[int] = mapped_column(Integer, nullable=False)
+    inputs_json: Mapped[str] = mapped_column(Text, nullable=False)
+    runner_json: Mapped[str] = mapped_column(Text, nullable=False)
+    capabilities_json: Mapped[str] = mapped_column(Text, nullable=False)
+    workspace_json: Mapped[str] = mapped_column(Text, nullable=False)
+    dispatch_intent_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("step_instance_id", "number", name="uq_recipe_attempt_number"),
+        CheckConstraint("number >= 1", name="ck_recipe_attempt_number"),
+    )
+
+
+class RecipeAttemptResultRow(Base):
+    __tablename__ = "recipe_attempt_results"
+
+    attempt_id: Mapped[str] = mapped_column(
+        String, ForeignKey("recipe_attempts.id", ondelete="CASCADE"), primary_key=True
+    )
+    outcome: Mapped[str] = mapped_column(String, nullable=False)
+    evidence_json: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    completed_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+
+class RecipeAttemptExecutionRow(Base):
+    """One attempt may retain several real agent executions, never fictional ones."""
+
+    __tablename__ = "recipe_attempt_executions"
+
+    sequence: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    attempt_id: Mapped[str] = mapped_column(
+        String, ForeignKey("recipe_attempts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    execution_token: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    session_id: Mapped[str] = mapped_column(String, nullable=False)
+    provider: Mapped[str] = mapped_column(String, nullable=False)
+    model: Mapped[str | None] = mapped_column(String)
+    started_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+
+class RecipeOutputReceiptRow(Base):
+    __tablename__ = "recipe_output_receipts"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    attempt_id: Mapped[str] = mapped_column(
+        String, ForeignKey("recipe_attempts.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    value_type: Mapped[str] = mapped_column(String, nullable=False)
+    content_json: Mapped[str] = mapped_column(Text, nullable=False)
+    checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+    __table_args__ = (UniqueConstraint("attempt_id", "name", name="uq_recipe_attempt_output"),)
+
+
+class RecipeGateBindingRow(Base):
+    __tablename__ = "recipe_gate_bindings"
+
+    attempt_id: Mapped[str] = mapped_column(
+        String, ForeignKey("recipe_attempts.id", ondelete="CASCADE"), primary_key=True
+    )
+    approval_id: Mapped[str] = mapped_column(String, ForeignKey("approvals.id"), nullable=False, unique=True)
+    input_checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    proposed_action: Mapped[str] = mapped_column(Text, nullable=False)
+    next_steps_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+
+class RecipeWorkspaceLeaseRow(Base):
+    __tablename__ = "recipe_workspace_leases"
+
+    workspace: Mapped[str] = mapped_column(String, primary_key=True)
+    attempt_id: Mapped[str] = mapped_column(
+        String, ForeignKey("recipe_attempts.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    acquired_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+
+class RecipeReviewRow(Base):
+    __tablename__ = "recipe_reviews"
+
+    sequence: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    run_id: Mapped[str] = mapped_column(String, ForeignKey("recipe_runs.id", ondelete="CASCADE"), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String, nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    decision: Mapped[str] = mapped_column(String, nullable=False)
+    code_ref_json: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+    __table_args__ = (UniqueConstraint("run_id", "idempotency_key", name="uq_recipe_review_request"),)
+
+
 class JobRow(Base):
     __tablename__ = "jobs"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
-    repo: Mapped[str] = mapped_column(String, nullable=False)
+    repo: Mapped[str | None] = mapped_column(String, nullable=True)
     # A Job never exists without an owning Project — the atomic unit is a
     # Project (AD-5); repos and jobs do not exist independently of one.
     project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
     state: Mapped[str] = mapped_column(String, nullable=False)
-    base_ref: Mapped[str] = mapped_column(String, nullable=False)
+    base_ref: Mapped[str | None] = mapped_column(String, nullable=True)
     branch: Mapped[str | None] = mapped_column(String, nullable=True)
     worktree_path: Mapped[str | None] = mapped_column(String, nullable=True)
     session_id: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -60,7 +286,12 @@ class JobRow(Base):
     parent_job_id: Mapped[str | None] = mapped_column(String, ForeignKey("jobs.id"), nullable=True)
     source: Mapped[str] = mapped_column(String, nullable=False, default="managed", server_default="managed")
     external_session_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    integration_binding_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("integration_bindings.id", name="fk_jobs_integration_binding"), nullable=True
+    )
+    observation_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
     tail_offset: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    ingest_checkpoint: Mapped[str | None] = mapped_column(Text, nullable=True)
     mode: Mapped[str] = mapped_column(String, nullable=False, default="standard", server_default="standard")
     story_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     trail_state_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
@@ -73,6 +304,94 @@ class JobRow(Base):
     )
     artifact_collection_updated_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
 
+    __table_args__ = (
+        CheckConstraint("observation_only = 0 OR source = 'integration'", name="ck_jobs_observation_source"),
+        CheckConstraint(
+            "(source = 'integration' AND observation_only = 1) OR (repo IS NOT NULL AND base_ref IS NOT NULL)",
+            name="ck_jobs_workspace_identity",
+        ),
+    )
+
+
+class IntegrationBindingRow(Base):
+    __tablename__ = "integration_bindings"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
+    job_id: Mapped[str | None] = mapped_column(String, ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True)
+    adapter_id: Mapped[str] = mapped_column(String, nullable=False)
+    mode: Mapped[str] = mapped_column(String, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    credential_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    config_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}", server_default="{}")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("mode IN ('observation','execution')", name="ck_integration_binding_mode"),
+        CheckConstraint("version >= 1", name="ck_integration_binding_version"),
+        Index("ix_integration_bindings_project", "project_id"),
+        Index("ix_integration_bindings_job", "job_id"),
+    )
+
+
+class IntegrationSourceCheckpointRow(Base):
+    __tablename__ = "integration_source_checkpoints"
+
+    binding_id: Mapped[str] = mapped_column(String, ForeignKey("integration_bindings.id"), primary_key=True)
+    source_key: Mapped[str] = mapped_column(String, primary_key=True)
+    parser_revision: Mapped[str] = mapped_column(String, primary_key=True)
+    record_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    prefix_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    canonical_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    parser_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    buffer_json: Mapped[str] = mapped_column(Text, nullable=False)
+    legacy_checkpoint_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    state: Mapped[str] = mapped_column(String, nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("record_count >= 0 AND version >= 1", name="ck_integration_checkpoint_progress"),
+        CheckConstraint("state IN ('accepted','reconciliation_required')", name="ck_integration_checkpoint_state"),
+    )
+
+
+class IntegrationProjectionCheckpointRow(Base):
+    __tablename__ = "integration_projection_checkpoints"
+
+    binding_id: Mapped[str] = mapped_column(String, ForeignKey("integration_bindings.id"), primary_key=True)
+    parser_revision: Mapped[str] = mapped_column(String, nullable=False)
+    parser_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    canonical_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    buffer_json: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(String, nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("version >= 1", name="ck_integration_projection_version"),
+        CheckConstraint("state IN ('accepted','reconciliation_required')", name="ck_integration_projection_state"),
+        CheckConstraint("length(CAST(buffer_json AS BLOB)) <= 8388608", name="ck_integration_projection_bound"),
+    )
+
+
+class IntegrationIdentityRow(Base):
+    __tablename__ = "integration_identities"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
+    adapter_id: Mapped[str] = mapped_column(String, nullable=False)
+    document_json: Mapped[str] = mapped_column(Text, nullable=False)
+    document_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    pinned_key_fingerprint: Mapped[str] = mapped_column(String, nullable=False)
+    endpoint: Mapped[str] = mapped_column(String, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    verified_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
 
 class PeerMessageRow(Base):
     __tablename__ = "peer_messages"
@@ -82,6 +401,9 @@ class PeerMessageRow(Base):
     recipient_job_id: Mapped[str] = mapped_column(String, ForeignKey("jobs.id", ondelete="CASCADE"), index=True)
     sender_session_id: Mapped[str | None] = mapped_column(String, nullable=True)
     recipient_session_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    recipient_attempt_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    recipient_execution_token: Mapped[str | None] = mapped_column(String, nullable=True)
+    sender_attempt_id: Mapped[str | None] = mapped_column(String, nullable=True)
     origin: Mapped[str] = mapped_column(String, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     reply_to: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -120,6 +442,7 @@ class EventRow(Base):
     # visibility/…). Persisted so DB-replay consumers (REST transcript, snapshot,
     # search) reconstruct the full TF event, since enrichment lives on metadata.
     event_metadata: Mapped[str] = mapped_column(Text, nullable=False, server_default="{}")  # JSON
+    raw_event: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON when supplied by the producer
 
     __table_args__ = (Index("idx_events_job_id", "job_id"),)
 
@@ -188,7 +511,10 @@ class StepRow(Base):
     trigger: Mapped[str] = mapped_column(String(30), nullable=False)
     tool_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     agent_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    timing_source: Mapped[str] = mapped_column(
+        String, nullable=False, default="legacy_unrecorded", server_default="legacy_unrecorded"
+    )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     start_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
@@ -198,7 +524,11 @@ class StepRow(Base):
     # Transcript context at step close (migration 0020)
     preceding_context: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array
 
-    __table_args__ = (Index("ix_steps_job_number", "job_id", "step_number"),)
+    __table_args__ = (
+        Index("ix_steps_job_number", "job_id", "step_number"),
+        CheckConstraint("timing_source IN ('legacy_unrecorded','live','source')", name="ck_steps_timing_source"),
+        CheckConstraint("timing_source != 'live' OR started_at IS NOT NULL", name="ck_steps_live_start"),
+    )
 
 
 class JobTelemetrySummaryRow(Base):
@@ -259,6 +589,7 @@ class JobTelemetrySummaryRow(Base):
     diff_lines_removed: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     agent_error_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     subagent_cost_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
+    derived_currency_qualified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
 
 
 class JobTelemetrySpanRow(Base):
@@ -311,6 +642,7 @@ class JobFileCostRow(Base):
     """Per-job file cost attribution (Item 14)."""
 
     __tablename__ = "job_file_cost"
+    currency_qualified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     job_id: Mapped[str] = mapped_column(String, ForeignKey("jobs.id"), nullable=False)
@@ -351,6 +683,7 @@ class CostAttributionRow(Base):
     """Per-job cost breakdown by dimension (phase, tool category, turn)."""
 
     __tablename__ = "job_cost_attribution"
+    currency_qualified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     job_id: Mapped[str] = mapped_column(String, ForeignKey("jobs.id"), nullable=False)
@@ -573,22 +906,14 @@ class TrackerLinkRow(Base):
 
 
 class TaskLinkRow(Base):
-    """A thin, Project-scoped correlation row for an ingested/assigned task node (Story 4.2, AD-9).
+    """Project-scoped correlation for saved task nodes and tracker assignments.
 
-    Populated by two independent creation paths (only ingestion is implemented
-    in this story): (1) ingestion — parsed from spec-kit
-    ``tasks.md`` in a Project's member repos, setting ``story_node_id``; or
-    (2) manual assignment (Story 4.3, not yet implemented) — targeting an
-    existing tracker ticket, setting ``tracker_ticket_ref``/``prompt_override``
-    with ``story_node_id`` left null. Exactly one of ``story_node_id`` /
-    ``tracker_ticket_ref`` is guaranteed non-null at creation, never neither.
-
-    ``story_node_id`` is only unique within one repo, so uniqueness/upsert
-    matching is on ``(project_id, repo_path, story_node_id)`` — never a bare
-    ``story_node_id``. ``depends_on`` is stored as a JSON list of composite
-    ``"{repo_path}::{story_node_id}"`` strings so a dependency edge always
-    unambiguously names its target, whether same-repo or a sibling member
-    repo of the same Project.
+    Historical source-backed nodes retain their story identifiers and dependency
+    graph. New manual assignments identify an existing tracker ticket and carry
+    a prompt override, with story_node_id left null. Source identifiers are
+    unique within a repository, so persisted dependency keys include both the
+    repository path and identifier. Retirement of source discovery does not
+    rewrite these identities, chain roots, or historical job links.
     """
 
     __tablename__ = "task_links"
@@ -622,6 +947,76 @@ class TaskLinkRow(Base):
     output_routes: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
     created_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+
+class TrackerOperationRow(Base):
+    """One explicit, at-most-once dispatch attempt with retained delivery evidence."""
+
+    __tablename__ = "tracker_operations"
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('awaiting_approval','approved','dispatching','applied',"
+            "'rejected','failed','uncertain','not_applied')",
+            name="ck_tracker_operations_state",
+        ),
+        CheckConstraint("action IN ('comment','transition')", name="ck_tracker_operations_action"),
+        CheckConstraint(
+            "target_kind IN ('comment','github_issue_state','jira_workflow_transition','azure_devops_work_item_state')",
+            name="ck_tracker_operations_target_kind",
+        ),
+        CheckConstraint("version >= 0", name="ck_tracker_operations_version"),
+        Index("ix_tracker_operations_project_created", "project_ref", "created_at"),
+        Index("ix_tracker_operations_job_created", "job_ref", "created_at"),
+        Index("ix_tracker_operations_state_claim", "state", "claim_expires_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    source_key: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    project_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    job_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    task_link_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("task_links.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    project_ref: Mapped[str] = mapped_column(String, nullable=False)
+    job_ref: Mapped[str] = mapped_column(String, nullable=False)
+    task_link_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    tracker_link_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("tracker_links.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    tracker_link_ref: Mapped[str] = mapped_column(String, nullable=False)
+    provider: Mapped[str] = mapped_column(String, nullable=False)
+    base_url: Mapped[str] = mapped_column(String, nullable=False)
+    external_ref: Mapped[str] = mapped_column(String, nullable=False)
+    credential_id_ref: Mapped[str] = mapped_column(String, nullable=False)
+    ticket_ref: Mapped[str] = mapped_column(String, nullable=False)
+    action: Mapped[str] = mapped_column(String, nullable=False)
+    target_kind: Mapped[str] = mapped_column(String, nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    approval_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("approvals.id", ondelete="SET NULL"), nullable=True, unique=True, index=True
+    )
+    approval_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    approval_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
+    state: Mapped[str] = mapped_column(String, nullable=False)
+    claim_token: Mapped[str | None] = mapped_column(String, nullable=True)
+    claim_expires_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    retry_of_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("tracker_operations.id"), nullable=True, index=True
+    )
+    provider_receipt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reconciliation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    dispatch_started_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
 
 
 class TrackerSummaryRow(Base):

@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
+
+import structlog
 
 if TYPE_CHECKING:
     from copilot import CopilotClient
+
+log = structlog.get_logger()
 
 
 def create_copilot_client(*, github_token: str | None = None) -> CopilotClient:
@@ -15,3 +20,28 @@ def create_copilot_client(*, github_token: str | None = None) -> CopilotClient:
     if github_token is not None:
         return CopilotClient(github_token=github_token, use_logged_in_user=False)
     return CopilotClient()
+
+
+async def stop_copilot_client(client: CopilotClient, *, timeout: float) -> None:
+    """Bound both graceful and forced SDK process teardown."""
+    cancelled = False
+    try:
+        await asyncio.wait_for(client.stop(), timeout=timeout)
+        return
+    except asyncio.CancelledError:
+        cancelled = True
+    except TimeoutError:
+        log.warning("copilot_client_stop_timed_out", timeout_seconds=timeout)
+    except Exception:
+        log.warning("copilot_client_stop_failed_forcing", exc_info=True)
+    try:
+        await asyncio.wait_for(client.force_stop(), timeout=timeout)
+    except TimeoutError:
+        log.error("copilot_client_force_stop_timed_out", timeout_seconds=timeout)
+        raise
+    except Exception:
+        log.error("copilot_client_force_stop_failed", exc_info=True)
+        raise
+    finally:
+        if cancelled:
+            raise asyncio.CancelledError

@@ -277,29 +277,6 @@ Central coordinator for imported sessions. Responsibilities:
   (`repo`, `branch`, `base_ref` via `GitService`)
 - Auto-register the repo in CodePlane's allowlist if not already present
   (imported sessions bypass the manual "add repo" flow)
-- Kick off CodeRecon indexing **in the background** — indexing can take
-  minutes for large repos so the job must not block on it. The sequence:
-  1. Create the job and start ingesting events immediately (no CodeRecon
-     dependency — transcript, telemetry, merge all work without it)
-  2. Fire an `asyncio.create_task` that calls `ensure_repo_indexed(repo)`
-  3. Once indexing completes, call `register_worktree(repo_name, cwd)`
-  4. Structural features (semantic diff, cycle detection, community
-     analysis, step-boundary structural warnings) become available
-     progressively — they were always optional and gated behind
-     `coderecon_service.available` checks
-  5. If the session ends before indexing finishes, structural analysis
-     is skipped for that session (same as when CodeRecon is disabled)
-  This mirrors `RuntimeService` where every CodeRecon call is wrapped
-  in `try/except` — it's never on the critical path
-- Create the `Job` record (state = `running`, source = `copilot_cli` or
-  `claude_cli`, `worktree_path` = CLI's `cwd`)
-- Route incoming data to the appropriate mapper
-- Publish `DomainEvent`s to the existing `EventBus`
-- Track per-session state (seq counters, turn IDs, telemetry accumulators)
-- Store pending operator messages for Claude hook response injection
-- Forward steering commands to the Copilot steer API
-- On session end, transition to `review` and trigger `MergeService` (same
-  post-session flow as managed sessions)
 
 ```python
 class IngestService:
@@ -313,7 +290,6 @@ class IngestService:
         merge_service: MergeService | None = None,
         trail_service: TrailService | None = None,
         job_service: JobService | None = None,
-        coderecon_service: CodeReconService | None = None,
     ) -> None: ...
 
     async def ingest_otel_span(self, span: dict) -> None:
@@ -335,9 +311,7 @@ class IngestService:
         2. Auto-register repo in allowlist if missing
         3. Detect branch, base_ref
         4. Create and persist Job record (returns immediately)
-        5. Fire background task: CodeRecon ensure_repo_indexed(repo)
            → on completion: register_worktree(repo_name, cwd)
-           Structural features light up when indexing finishes.
            If it never finishes, the job works fine without it.
         """
 
@@ -441,7 +415,6 @@ IngestService(
     merge_service=merge_service,
     trail_service=trail_service,
     job_service=job_service,
-    coderecon_service=coderecon_service,
 )
 
 # OtelFileWatcher (only if COPILOT_OTEL_FILE_EXPORTER_PATH is set)
@@ -584,7 +557,6 @@ OTEL OTLP metrics (`claude_code.cost.usage`, `claude_code.token.usage`)
 | `SidecarSessionManager` | Not applicable (no managed sidecar sessions) |
 | `DiffService` | Works — `worktree_path` points to CLI's `cwd`. For Copilot: depends on resolving `cwd` (see §13.5) |
 | `MergeService` | Needs a new `_resolve_imported()` path. Existing local merge/checkout/stash logic assumes CodePlane owns the worktree — for imported sessions it must push + remote-merge instead. See §4.1 "No destructive operations" |
-| `CodeReconService` | Works — `IngestService` fires background indexing task at session start. Structural features become available when indexing completes. If the repo was already indexed (e.g. previously added via settings), structural features are immediate |
 | Frontend SSE handlers | All existing handlers work unchanged |
 | Frontend store shape | Only additive field (`source`) |
 

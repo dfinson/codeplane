@@ -1,5 +1,33 @@
 import { describe, it, expect } from "vitest";
 import { deepSnakeToCamel, normalizeTFEvent, deriveJobStateFrame, type TFSessionEvent } from "./sseNormalize";
+import { handleApprovalRequested, handleBatchApprovalRequested } from "./handlers/approvalHandlers";
+import { useStore } from "./index";
+
+it("shows a batched permission once and retains an unavailable risk score", () => {
+  const state = useStore.getState();
+  const approval = normalizeTFEvent({
+    id: "request", kind: "permission.requested", session_id: "job",
+    payload: { approval_id: "approval", batch_managed: true }, metadata: null,
+  });
+  expect(handleApprovalRequested(state, approval)).toBeNull();
+  const batch = normalizeTFEvent({
+    id: "batch-request", kind: "permission.batch.requested", session_id: "job", metadata: null,
+    payload: { batch_id: "batch", actions: [{
+      id: "action", kind: "file", recommendedAction: "escalate", reasonCode: "cp_usd_ceiling",
+      reason: "cp_usd_ceiling", riskScore: null, riskBand: "unknown", description: "view: source.py",
+    }] },
+  });
+  expect(handleBatchApprovalRequested(state, batch)?.batchApprovals?.batch?.actions[0]?.riskScore).toBeNull();
+});
+
+it("preserves authoritative attempt model scope from canonical metadata", () => {
+  const result = normalizeTFEvent({
+    id: "event", kind: "model.downgraded", session_id: "job",
+    payload: { actual_model: "actual", attempt_id: "untrusted-payload" },
+    metadata: { attempt_id: "attempt", execution_epoch: "epoch", recipe_run_id: "run" },
+  });
+  expect(result).toMatchObject({ actualModel: "actual", attemptId: "attempt", executionEpoch: "epoch", recipeRunId: "run" });
+});
 
 describe("deepSnakeToCamel", () => {
   it("converts top-level snake keys to camelCase", () => {
@@ -57,6 +85,23 @@ describe("normalizeTFEvent", () => {
       ...overrides,
     };
   }
+
+  it("keeps an admission receipt distinct from observed operator input", () => {
+    const result = normalizeTFEvent(ev({
+      kind: "message.user",
+      payload: {
+        content: "Coordinated operator admission receipt",
+        operator_content: "Instruction", admission_status: "accepted", execution_status: "unconfirmed",
+      },
+      metadata: { execution_token: "exact-target", run_id: "actual-session" },
+    }));
+    expect(result).toMatchObject({
+      admissionStatus: "accepted", executionStatus: "unconfirmed", operatorContent: "Instruction",
+      metadata: { execution_token: "exact-target", run_id: "actual-session" },
+    });
+    expect(result.turnId).toBeUndefined();
+    expect(deriveJobStateFrame("message.user", result)).toBeNull();
+  });
 
   it("injects jobId from the envelope session_id", () => {
     const out = normalizeTFEvent(ev({ payload: { tool_name: "grep" } }));

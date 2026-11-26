@@ -59,6 +59,8 @@ def resolve_remote_probe_target(original: LaunchProfile, replacement: LaunchProf
     Raises ``RemoteProbeError`` if the profile that should own the origin for
     the resolved mode did not record one.
     """
+    if original.effective_auth_mode != replacement.effective_auth_mode:
+        raise RemoteProbeError("replacement authentication mode differs from the original launch")
     if original.tunnel_origin_reusable:
         origin = original.tunnel_origin
         if not origin:

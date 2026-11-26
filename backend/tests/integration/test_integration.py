@@ -95,22 +95,20 @@ class TestApprovalFlowIntegration:
 
     @pytest.mark.asyncio
     async def test_cleanup_unblocks_waiting_code(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
-        """Cleanup cancels pending futures, which should raise CancelledError."""
+        """Cleanup rejects execution requests durably before releasing waiters."""
         svc = ApprovalService(session_factory)
         approval = await svc.create_request("job-1", "Check?")
 
-        async def wait_and_catch():
-            try:
-                await svc.wait_for_resolution(approval.id)
-                return "resolved"
-            except asyncio.CancelledError:
-                return "cancelled"
-
-        task = asyncio.create_task(wait_and_catch())
+        task = asyncio.create_task(svc.wait_for_resolution(approval.id))
         await asyncio.sleep(0.01)
         await svc.cleanup_job("job-1")
         result = await task
-        assert result == "cancelled"
+        assert result == "rejected"
+        stored = await svc.get(approval.id)
+        assert stored is not None
+        assert stored.resolution == "rejected"
+        assert stored.notes == "Execution ended before approval was consumed"
+        assert await svc.list_pending("job-1") == []
 
     @pytest.mark.asyncio
     async def test_multiple_approvals_per_job(self, session_factory: async_sessionmaker[AsyncSession]) -> None:

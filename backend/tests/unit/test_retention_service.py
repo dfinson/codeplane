@@ -156,3 +156,94 @@ class TestRunCleanup:
         result = await retention_svc.run_cleanup()
         assert result["artifacts_deleted"] == 0
         assert disk_file.exists()
+
+
+@pytest.mark.parametrize("archive_mode", ["manual", "retention"])
+async def test_archive_preserves_pending_tracker_operation_evidence(
+    session_factory,
+    config,
+    retention_svc,
+    archive_mode,
+):
+    from backend.models.db import CredentialRow, TrackerLinkRow
+    from backend.persistence.tracker_operation_repo import TrackerOperationRepository
+    from backend.services.job.approval_service import ApprovalService
+    from backend.services.job.job_service import JobService
+    from backend.services.tracker_write_service import TrackerWriteAction, TrackerWriteRequest, TrackerWriteService
+
+    old = datetime.now(UTC) - timedelta(days=30)
+    config.retention.auto_archive_days = 7
+    service = TrackerWriteService(ApprovalService(session_factory), session_factory=session_factory)
+    async with session_factory() as session:
+        session.add(
+            ProjectRow(
+                id="outbox-project",
+                name="Outbox",
+                repo_paths='["/test"]',
+                created_at=old,
+                updated_at=old,
+            )
+        )
+        session.add(
+            CredentialRow(
+                id="outbox-credential",
+                provider="github",
+                label="Test",
+                base_url="https://api.github.com",
+                encrypted_secret="unused",
+                created_at=old.isoformat(),
+            )
+        )
+        await session.flush()
+        session.add(
+            JobRow(
+                id="outbox-job",
+                project_id="outbox-project",
+                repo="/test",
+                prompt="Test",
+                state="completed",
+                resolution="merged",
+                base_ref="main",
+                created_at=old,
+                updated_at=old,
+                completed_at=old,
+            )
+        )
+        session.add(
+            TrackerLinkRow(
+                id="outbox-link",
+                project_id="outbox-project",
+                credential_id="outbox-credential",
+                external_ref="owner/1",
+                created_at=old.isoformat(),
+            )
+        )
+        await session.flush()
+        operation = await service.enqueue_in_session(
+            session,
+            "outbox-job",
+            TrackerWriteRequest(
+                "outbox-link",
+                "owner/repo#7",
+                TrackerWriteAction.comment,
+                "Retain exact evidence.",
+            ),
+        )
+        await session.commit()
+    if archive_mode == "manual":
+        async with session_factory() as session:
+            await JobService.from_session(session, config).archive_job("outbox-job")
+            await session.commit()
+    else:
+        result = await RetentionService(session_factory, config).run_cleanup()
+        assert result["auto_archived"] == 1
+    async with session_factory() as session:
+        job = await session.get(JobRow, "outbox-job")
+        retained = await TrackerOperationRepository(session).get(operation.id)
+        assert job is not None and job.archived_at is not None
+        assert retained is not None
+        assert retained.job_id == retained.job_ref == "outbox-job"
+        assert retained.project_id == retained.project_ref == "outbox-project"
+        assert retained.state == "awaiting_approval"
+        assert retained.value == "Retain exact evidence."
+    await service.close()

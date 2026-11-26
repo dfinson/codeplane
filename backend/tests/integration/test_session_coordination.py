@@ -4,12 +4,17 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from backend.config import CPLConfig
 from backend.models.api_schemas import PeerMessageRequest
-from backend.models.domain import StateConflictError
+from backend.models.domain import ApprovalResolution, JobState, StateConflictError
+from backend.models.events import EventKind, new_event
 from backend.persistence.job_repo import JobRepository
 from backend.persistence.project_repo import ProjectRepository
 from backend.services.adapters.agent_adapter import AgentAdapterInterface
 from backend.services.copilot_adapter._adapter import CopilotAdapter
+from backend.services.events.event_bus import EventBus
+from backend.services.job.approval_service import ApprovalService
+from backend.services.runtime.attempt_bindings import AttemptBindings
 from backend.services.runtime.service import AgentSession, RuntimeService
 from backend.services.session_coordination import SessionCoordination
 
@@ -18,16 +23,26 @@ def live_session(session_id="sdk-target"):
     session = AgentSession()
     session._adapter = AsyncMock(spec=AgentAdapterInterface)
     session._session_id = session_id
+    session.execution_token = f"token-{session_id}"
     return session
 
 
 def runtime_with(target):
     runtime = MagicMock(spec=RuntimeService)
     runtime.current_peer_session.side_effect = lambda job_id: target if job_id == "target" else None
+    runtime.peer_execution_is_current.side_effect = lambda job_id, target: RuntimeService.peer_execution_is_current(
+        runtime, job_id, target
+    )
+    runtime.peer_execution_is_eligible.side_effect = lambda job_id, target: RuntimeService.peer_execution_is_current(
+        runtime, job_id, target
+    )
     runtime._echo_suppress = {}
+    runtime._waiting_for_approval = set()
+    runtime._attempt_bindings = AttemptBindings("test")
+    runtime._recipe_controllers = {}
 
-    async def deliver(job_id, session, text):
-        await RuntimeService.deliver_peer_note(runtime, job_id, session, text)
+    async def deliver(job_id, session, text, **kwargs):
+        await RuntimeService.deliver_peer_note(runtime, job_id, session, text, **kwargs)
 
     runtime.deliver_peer_note.side_effect = deliver
     return runtime
@@ -74,6 +89,24 @@ async def test_operator_route_cannot_claim_agent_origin(client, seed_job, mock_r
     assert response.json()["origin"] == "operator"
     assert response.json()["senderSessionId"] is None
     assert response.json()["status"] == "rejected"
+
+
+async def test_agent_directory_route_exposes_exact_selection_and_unavailability(client, seed_job, mock_runtime_service):
+    await seed_job(job_id="source")
+    await seed_job(job_id="target")
+    mock_runtime_service.current_peer_session.return_value = live_session()
+    mock_runtime_service.peer_execution_is_eligible.return_value = True
+    response = await client.get("/api/jobs/source/peer-agents?target_job_id=target")
+    assert response.status_code == 200
+    card = response.json()["items"][0]
+    assert card["sessionId"] == "sdk-target"
+    assert card["executionToken"] == "token-sdk-target"
+    assert card["acceptsPeerMessages"]
+    mock_runtime_service.current_peer_session.return_value = None
+    unavailable = await client.get("/api/jobs/source/peer-agents?target_job_id=target")
+    assert unavailable.status_code == 200
+    assert not unavailable.json()["items"][0]["acceptsPeerMessages"]
+    assert unavailable.json()["items"][0]["executionToken"] is None
 
 
 async def test_accepted_peer_note_is_durable_attributed_and_not_replayed(session_factory, seed_job):
@@ -186,6 +219,8 @@ async def test_cross_project_navigation_and_messages_are_excluded(session_factor
     assert (await service.directory("source")).peers == []
     with pytest.raises(StateConflictError, match="same project"):
         await service.send("source", request(), origin="operator")
+    with pytest.raises(StateConflictError, match="same project"):
+        await service.agents("source", "target")
     runtime.deliver_peer_note.assert_not_called()
 
 
@@ -246,7 +281,7 @@ async def test_recipient_change_during_account_validation_rejects_dispatch(sessi
     runtime.publish_peer_note.assert_not_called()
 
 
-@pytest.mark.parametrize("transition", ["gated", "cancelling"])
+@pytest.mark.parametrize("transition", ["gated", "cancelling", "approval"])
 async def test_runtime_ineligible_during_account_validation_rejects_dispatch(session_factory, seed_job, transition):
     await seed_job(job_id="source")
     await seed_job(job_id="target")
@@ -277,10 +312,12 @@ async def test_runtime_ineligible_during_account_validation_rejects_dispatch(ses
         await asyncio.wait_for(entered.wait(), timeout=5)
         if transition == "gated":
             runtime._active_gates["target"] = {"gate": "Waiting for review"}
+        elif transition == "approval":
+            runtime._waiting_for_approval.add("target")
         else:
             execution.cancel()
         assert not target.tools_paused
-        assert "sdk-target" not in adapter._cleanup_tasks
+        assert "sdk-target" not in adapter._stop_tasks
     finally:
         release.set()
         receipt = await sending
@@ -290,3 +327,129 @@ async def test_runtime_ineligible_during_account_validation_rejects_dispatch(ses
     assert (await service.messages("source")).items[0].status == "rejected"
     sdk.send.assert_not_awaited()
     runtime.publish_peer_note.assert_not_called()
+
+
+@pytest.mark.parametrize("transition", ["paused", "cancelled", "replaced"])
+async def test_sender_change_during_recipient_validation_rejects_dispatch(session_factory, seed_job, transition):
+    await seed_job(job_id="source")
+    await seed_job(job_id="target")
+    adapter = CopilotAdapter(session_factory=session_factory)
+    sdk = MagicMock(send=AsyncMock())
+    adapter._sessions["sdk-target"] = sdk
+    adapter.set_job_id("sdk-target", "target")
+    source, target = live_session("sdk-source"), live_session()
+    target._adapter = adapter
+    runtime = runtime_with(target)
+    source_task, target_task = asyncio.create_task(asyncio.Event().wait()), asyncio.create_task(asyncio.Event().wait())
+    runtime._tasks = {"source": source_task, "target": target_task}
+    runtime._active_gates = {}
+    runtime._agent_sessions = {"source": source, "target": target}
+    runtime.current_peer_session.side_effect = lambda job_id: RuntimeService.current_peer_session(runtime, job_id)
+    entered, release = asyncio.Event(), asyncio.Event()
+    validate = adapter._validate_session_account
+
+    async def blocked_validation(session_id):
+        entered.set()
+        await release.wait()
+        return await validate(session_id)
+
+    adapter._validate_session_account = blocked_validation
+    service = SessionCoordination(session_factory, runtime)
+    sending = asyncio.create_task(service.send("source", request(), origin="agent", sender_execution=source))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        if transition == "paused":
+            source.pause_tools()
+        elif transition == "cancelled":
+            source_task.cancel()
+        else:
+            runtime._agent_sessions["source"] = live_session("replacement")
+    finally:
+        release.set()
+        receipt = await sending
+        source_task.cancel()
+        target_task.cancel()
+        await asyncio.gather(source_task, target_task, return_exceptions=True)
+    assert receipt.status == "rejected"
+    assert (await service.messages("source")).items[0].status == "rejected"
+    sdk.send.assert_not_awaited()
+    runtime.publish_peer_note.assert_not_called()
+
+
+@pytest.mark.parametrize("resolution", [ApprovalResolution.approved, ApprovalResolution.rejected])
+async def test_approval_fence_spans_entry_restoration_and_publication(
+    session_factory, seed_job, monkeypatch, resolution
+):
+    await seed_job(job_id="target")
+    approvals = ApprovalService(session_factory)
+    runtime = RuntimeService(
+        session_factory=session_factory,
+        event_bus=EventBus(),
+        adapter_registry=MagicMock(),
+        config=CPLConfig(),
+        approval_service=approvals,
+    )
+    target = live_session()
+    runtime._agent_sessions["target"] = target
+    owner = asyncio.create_task(asyncio.Event().wait())
+    runtime._tasks["target"] = owner
+    approval = await approvals.create_request("target", "Review")
+    entered, restoring, publishing = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    allow_entry, allow_restore, allow_publish = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    factory, publish = runtime._make_job_service, runtime._publish_state_event
+
+    def held_factory(session):
+        service = factory(session)
+        transition = service.transition_state
+
+        async def held_transition(job_id, state):
+            if state == JobState.waiting_for_approval:
+                entered.set()
+                await allow_entry.wait()
+            elif state == JobState.running:
+                restoring.set()
+                await allow_restore.wait()
+            return await transition(job_id, state)
+
+        service.transition_state = held_transition
+        return service
+
+    async def held_publish(*args):
+        publishing.set()
+        await allow_publish.wait()
+        return await publish(*args)
+
+    monkeypatch.setattr(runtime, "_make_job_service", held_factory)
+    monkeypatch.setattr(runtime, "_publish_state_event", held_publish)
+    handler = asyncio.create_task(
+        runtime._handle_approval_request(
+            "target",
+            new_event("target", EventKind.approval_requested, {"approval_id": approval.id}),
+            "Rejected",
+        )
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        assert runtime.current_peer_session("target") is None
+        assert (await runtime._get_job("target")).state == JobState.running
+        allow_entry.set()
+        await approvals.resolve(approval.id, resolution)
+        if resolution == ApprovalResolution.approved:
+            await asyncio.wait_for(restoring.wait(), 5)
+            assert runtime.current_peer_session("target") is None
+            assert (await runtime._get_job("target")).state == JobState.waiting_for_approval
+            allow_restore.set()
+            await asyncio.wait_for(publishing.wait(), 5)
+            assert (await runtime._get_job("target")).state == JobState.running
+            assert runtime.current_peer_session("target") is None
+            allow_publish.set()
+        assert await asyncio.wait_for(handler, 5) == resolution
+        if resolution == ApprovalResolution.approved:
+            assert runtime.current_peer_session("target") is target
+        else:
+            assert "target" in runtime._waiting_for_approval
+            assert runtime.current_peer_session("target") is None
+    finally:
+        handler.cancel()
+        owner.cancel()
+        await asyncio.gather(handler, owner, return_exceptions=True)

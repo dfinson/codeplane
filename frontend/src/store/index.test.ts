@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   useStore,
   selectJobs,
@@ -6,8 +6,11 @@ import {
   selectApprovals,
   selectJobLogs,
   selectJobTranscript,
+  selectTrackerOperationsForProject,
 } from "./index";
 import type { JobSummary, ApprovalRequest } from "./index";
+import type { TrackerOperationResponse } from "../api/types";
+import * as apiClient from "../api/client";
 
 function makeJob(overrides: Partial<JobSummary> = {}): JobSummary {
   return {
@@ -15,6 +18,7 @@ function makeJob(overrides: Partial<JobSummary> = {}): JobSummary {
     repo: "/repos/test",
     prompt: "Fix the bug",
     state: "running",
+    sessionCount: 1,
     baseRef: "main",
     worktreePath: "/repos/test",
     branch: "fix/bug",
@@ -37,6 +41,86 @@ describe("AppStore", () => {
       connectionStatus: "disconnected",
     });
   });
+
+    describe("tracker operation REST hydration", () => {
+      function operation(overrides: Partial<TrackerOperationResponse> = {}): TrackerOperationResponse {
+        return {
+          id: "op-1", operationId: "op-1", sourceKey: "source-1",
+          projectId: "project-1", projectRef: "project-1", jobId: "job-1", jobRef: "job-1",
+          taskLinkId: null, taskLinkRef: null, trackerLinkId: "link-1", trackerLinkRef: "link-1",
+          provider: "github", baseUrl: "https://github.com", externalRef: "org/project",
+          credentialIdRef: "credential-1", ticketRef: "org/repo#1",
+          action: "comment", targetKind: "comment", value: "Exact comment", normalizedValue: null, normalizedTarget: null,
+          approvalId: null, approvalRef: null, approvalSnapshot: null,
+          state: "awaiting_approval", version: 0, retryOfId: null, providerReceipt: null,
+          errorCode: null, errorDetail: null, reconciliation: null,
+          createdAt: "2026-11-11T12:00:00Z", updatedAt: "2026-11-11T12:00:00Z",
+          dispatchStartedAt: null, completedAt: null, ...overrides,
+        };
+      }
+
+      beforeEach(() => useStore.setState({ trackerOperations: {}, trackerOperationLoads: {} }));
+      afterEach(() => vi.restoreAllMocks());
+
+      it("does not let a delayed list overwrite a newer SSE state or erase another project", async () => {
+        let finish!: (value: { items: TrackerOperationResponse[] }) => void;
+        vi.spyOn(apiClient, "fetchTrackerOperations").mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+        const pending = useStore.getState().loadTrackerOperations("project-1");
+        useStore.getState().hydrateTrackerOperations([
+          operation({ state: "applied", version: 5 }),
+          operation({ id: "other", operationId: "other", projectRef: "project-2" }),
+        ]);
+        finish({ items: [operation({ state: "approved", version: 2 })] });
+        await pending;
+        expect(useStore.getState().trackerOperations["op-1"]?.state).toBe("applied");
+        expect(useStore.getState().trackerOperations["other"]?.projectRef).toBe("project-2");
+        expect(useStore.getState().trackerOperationLoads["project-1"]?.loaded).toBe(true);
+      });
+
+      it("retains history after a load error and rehydrates every tracked project on reconnect", async () => {
+        const fetch = vi.spyOn(apiClient, "fetchTrackerOperations");
+        fetch.mockResolvedValueOnce({ items: [operation()] });
+        await useStore.getState().loadTrackerOperations("project-1");
+        fetch.mockRejectedValueOnce(new Error("Unavailable"));
+        await useStore.getState().loadTrackerOperations("project-1");
+        expect(useStore.getState().trackerOperationLoads["project-1"]?.error).toBe("Unavailable");
+        expect(useStore.getState().trackerOperations["op-1"]?.state).toBe("awaiting_approval");
+        useStore.getState().hydrateTrackerOperations([operation({ id: "other", operationId: "other", projectRef: "project-2" })]);
+        fetch.mockImplementation(async (projectRef) => ({ items: projectRef === "project-1"
+          ? [operation({ state: "uncertain", version: 3 })]
+          : [operation({ id: "other", operationId: "other", projectRef: "project-2", state: "failed", version: 2 })],
+        }));
+        await useStore.getState().refreshTrackerOperations();
+        expect(fetch).toHaveBeenCalledWith("project-2");
+        expect(useStore.getState().trackerOperations["op-1"]?.state).toBe("uncertain");
+        expect(useStore.getState().trackerOperationLoads["project-1"]?.error).toBeNull();
+        expect(useStore.getState().trackerOperations["other"]?.state).toBe("failed");
+      });
+
+      it("does not let an older request failure replace the latest load status", async () => {
+        let rejectOld!: (reason: Error) => void;
+        vi.spyOn(apiClient, "fetchTrackerOperations")
+          .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectOld = reject; }))
+          .mockResolvedValueOnce({ items: [operation({ state: "failed", version: 3 })] });
+        const old = useStore.getState().loadTrackerOperations("project-1");
+        await useStore.getState().loadTrackerOperations("project-1");
+        rejectOld(new Error("Late failure"));
+        await old;
+        expect(useStore.getState().trackerOperationLoads["project-1"]).toMatchObject({ loaded: true, loading: false, error: null });
+      });
+
+      it("keeps project selectors stable and filters a mismatched project response", async () => {
+        const selector = selectTrackerOperationsForProject("project-1");
+        expect(selector(useStore.getState())).toBe(selector(useStore.getState()));
+        vi.spyOn(apiClient, "fetchTrackerOperations").mockResolvedValue({
+          items: [operation(), operation({ id: "other", operationId: "other", projectRef: "project-2" })],
+        });
+        await useStore.getState().loadTrackerOperations("project-1");
+        expect(selector(useStore.getState()).map((item) => item.id)).toEqual(["op-1"]);
+        expect(selector(useStore.getState())).toBe(selector(useStore.getState()));
+        expect(useStore.getState().trackerOperations["other"]).toBeUndefined();
+      });
+    });
 
   describe("setConnectionStatus", () => {
     it("updates connection status", () => {

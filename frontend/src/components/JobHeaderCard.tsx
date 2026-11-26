@@ -171,7 +171,7 @@ export function JobHeaderCard({
             <h1 className="text-sm font-semibold text-foreground truncate">{job.title || job.id}</h1>
           </button>
 
-          <span aria-live="polite"><StateBadge state={job.state} /></span>
+          <span aria-live="polite"><StateBadge state={job.observationOnly ? "observing" : job.state} /></span>
 
           <div className="flex-1" />
           <div className="flex items-center gap-1.5 shrink-0">
@@ -190,7 +190,7 @@ export function JobHeaderCard({
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
-            <StateBadge state={job.state} />
+            <StateBadge state={job.observationOnly ? "observing" : job.state} />
             <SdkBadge sdk={job.sdk} />
           </div>
 
@@ -256,7 +256,7 @@ export function JobHeaderCard({
             <h1 className="text-base lg:text-lg font-semibold text-foreground truncate">{job.title || job.id}</h1>
           </button>
 
-          <span aria-live="polite"><StateBadge state={job.state} /></span>
+          <span aria-live="polite"><StateBadge state={job.observationOnly ? "observing" : job.state} /></span>
           <SdkBadge sdk={job.sdk} />
 
           {/* Collapsed inline context */}

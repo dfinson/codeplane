@@ -379,10 +379,94 @@ class TestBuildReferencesDedup:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def local_story_encoding(monkeypatch):
+    import importlib.util
+
+    from backend.services.story import service
+
+    get_tokenizer = service._get_tokenizer
+    get_tokenizer.cache_clear()
+    if importlib.util.find_spec("tiktoken") is not None:
+        import tiktoken
+
+        encoding = tiktoken.Encoding(
+            name="local-story-fixture",
+            pat_str=r"(?s).+",
+            mergeable_ranks={
+                **{bytes([value]): value for value in range(256)},
+                b"aa": 256,
+                b"aaaa": 257,
+                b"aaaaaaaa": 258,
+            },
+            special_tokens={},
+        )
+        monkeypatch.setattr(tiktoken, "get_encoding", lambda _: encoding)
+    yield
+    get_tokenizer.cache_clear()
+
+
 class TestEstimateTokens:
     def test_basic_estimate(self):
+        from backend.services.story import service
+
         text = "a" * 400
-        assert _estimate_tokens(text) == 50
+        expected = 50 if service._get_tokenizer() is not None else 100
+        assert _estimate_tokens(text) == expected
+
+    def test_unavailable_tokenizer_uses_character_estimate(self, monkeypatch):
+        from backend.services.story import service
+
+        monkeypatch.setattr(service, "_get_tokenizer", lambda: None)
+        assert _estimate_tokens("a" * 400) == 100
+
+    def test_missing_package_is_logged_and_cached_without_hiding_broken_imports(self, monkeypatch):
+        import builtins
+
+        from backend.services.story import service
+
+        original_import = builtins.__import__
+        service._get_tokenizer.cache_clear()
+        attempts = 0
+
+        def absent(name, *args, **kwargs):
+            nonlocal attempts
+            if name == "tiktoken":
+                attempts += 1
+                raise ModuleNotFoundError("optional package is absent", name="tiktoken")
+            return original_import(name, *args, **kwargs)
+
+        log = MagicMock()
+        monkeypatch.setattr(service, "log", log)
+        monkeypatch.setattr(builtins, "__import__", absent)
+        try:
+            assert _estimate_tokens("a" * 400) == _estimate_tokens("b" * 400) == 100
+            assert attempts == 1
+            log.warning.assert_called_once_with(
+                "story_tokenizer_unavailable", error="optional package is absent", fallback="character_estimate"
+            )
+        finally:
+            service._get_tokenizer.cache_clear()
+
+    def test_broken_optional_import_is_not_silently_estimated(self, monkeypatch):
+        import builtins
+
+        from backend.services.story import service
+
+        original_import = builtins.__import__
+        service._get_tokenizer.cache_clear()
+
+        def broken(name, *args, **kwargs):
+            if name == "tiktoken":
+                raise ModuleNotFoundError("missing tokenizer dependency", name="broken_dependency")
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", broken)
+        try:
+            with pytest.raises(ModuleNotFoundError, match="missing tokenizer dependency"):
+                _estimate_tokens("input")
+        finally:
+            service._get_tokenizer.cache_clear()
 
     def test_empty(self):
         assert _estimate_tokens("") == 0

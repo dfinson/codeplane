@@ -23,9 +23,12 @@ class InferenceUtilityAdapter(AgentAdapterInterface):
         registry: AdapterRegistry,
         default_sdk: str,
         session_factory: async_sessionmaker[AsyncSession],
+        *,
+        utility_sdk: str | None = None,
     ) -> None:
         self._registry = registry
         self._default_sdk = default_sdk
+        self._utility_sdk = utility_sdk or default_sdk
         self._session_factory = session_factory
         self._sessions: dict[str, AgentAdapterInterface] = {}
 
@@ -66,8 +69,13 @@ class InferenceUtilityAdapter(AgentAdapterInterface):
         system_message: str | None = None,
         excluded_tools: list[str] | None = None,
     ) -> CompletionResult:
-        adapter = await self._adapter()
-        return await adapter.complete(prompt, model=model, system_message=system_message, excluded_tools=excluded_tools)
+        from backend.services.adapters.completion_context import current_completion_context
+
+        token = await resolve_inference_token(self._session_factory, job_id=current_completion_context().job_id)
+        provider = self._registry.get_completion_provider("copilot" if token else self._utility_sdk)
+        return await provider.complete(
+            prompt, model=model, system_message=system_message, excluded_tools=excluded_tools
+        )
 
     def set_policy_router(self, *args: Any, **kwargs: Any) -> None:
         for sdk in {self._default_sdk, "copilot"}:

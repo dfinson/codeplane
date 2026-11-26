@@ -11,6 +11,8 @@ logged or transmitted.
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import hmac
 import os
 import stat
 
@@ -52,3 +54,12 @@ def decrypt_secret(token: str) -> str:
         return fernet.decrypt(token.encode("ascii")).decode("utf-8")
     except InvalidToken as exc:
         raise CredentialDecryptionError("Stored credential secret could not be decrypted") from exc
+
+
+def derive_export_identity_key(destination: str) -> bytes:
+    """Domain-separate export pseudonyms from the existing local credential key."""
+    return hmac.new(
+        _load_or_create_key(),
+        b"codeplane-export-correlation-v1\0" + destination.encode("utf-8"),
+        hashlib.sha256,
+    ).digest()

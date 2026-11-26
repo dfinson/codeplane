@@ -50,6 +50,287 @@ async def _create_credential(client: AsyncClient) -> str:
     return str(resp.json()["id"])
 
 
+class TestTrackerOperations:
+    @pytest.fixture
+    async def engine(self, tmp_path, monkeypatch):
+        from backend.models.db import Base
+        from backend.persistence import database
+
+        monkeypatch.setattr(database, "_write_lock", None)
+        engine = database.create_engine(tmp_path / "operation-api.db")
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        yield engine
+        await engine.dispose()
+
+    async def _operation(self, client, app, session_factory):
+        from datetime import UTC, datetime
+
+        from backend.models.db import JobRow
+        from backend.services.tracker_write_service import TrackerWriteAction, TrackerWriteRequest, TrackerWriteService
+
+        await _seed_project(session_factory)
+        credential_id = await _create_credential(client)
+        link = await client.post(
+            "/api/projects/proj-1/tracker-links",
+            json={"credentialId": credential_id, "externalRef": "owner/1"},
+        )
+        assert link.status_code == 201
+        now = datetime.now(UTC)
+        async with session_factory() as session:
+            session.add(
+                JobRow(
+                    id="operation-job",
+                    project_id="proj-1",
+                    repo="/test/repo",
+                    prompt="Test",
+                    state="completed",
+                    resolution="merged",
+                    base_ref="main",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            await session.commit()
+        service = await app.state.dishka_container.get(TrackerWriteService)
+        operation = await service.enqueue(
+            "operation-job",
+            TrackerWriteRequest(
+                link.json()["id"],
+                "owner/repo#7",
+                TrackerWriteAction.comment,
+                "Exact comment.\nNo marker.",
+            ),
+            source_key="api-operation",
+        )
+        return service, operation
+
+    async def _wait(self, service, operation_id, predicate):
+        import asyncio
+
+        for _ in range(200):
+            operation = await service.get_operation(operation_id)
+            if predicate(operation):
+                return operation
+            await asyncio.sleep(0.01)
+        pytest.fail(f"Operation did not reach expected condition: {operation.state}")
+
+    async def test_list_and_detail_are_project_scoped(self, client, app, session_factory):
+        service, operation = await self._operation(client, app, session_factory)
+        response = await client.get(
+            "/api/projects/proj-1/tracker-links/operations", params={"job_ref": "operation-job"}
+        )
+        assert response.status_code == 200
+        item = response.json()["items"][0]
+        assert item["id"] == operation.id
+        assert item["projectRef"] == "proj-1"
+        assert item["jobRef"] == "operation-job"
+        assert item["value"] == "Exact comment.\nNo marker."
+        assert item["state"] == "awaiting_approval"
+        detail = await client.get(f"/api/projects/proj-1/tracker-links/operations/{operation.id}")
+        assert detail.status_code == 200 and detail.json()["id"] == operation.id
+        wrong_scope = await client.get(f"/api/projects/foreign/tracker-links/operations/{operation.id}")
+        assert wrong_scope.status_code == 404
+        filtered = await client.get(
+            "/api/projects/proj-1/tracker-links/operations",
+            params={"job_ref": "unrelated"},
+        )
+        assert filtered.json() == {"items": []}
+        assert len(await service.list_operations("proj-1")) == 1
+
+    async def test_reconciliation_and_retry_enforce_evidence_version_and_approval(
+        self,
+        client,
+        app,
+        session_factory,
+        monkeypatch,
+    ):
+        from unittest.mock import AsyncMock
+
+        import httpx
+
+        dispatch = AsyncMock(side_effect=httpx.ReadTimeout("Lost response"))
+        monkeypatch.setattr("backend.services.tracker_resolution.dispatch_tracker_write", dispatch)
+        service, operation = await self._operation(client, app, session_factory)
+        pending = await self._wait(service, operation.id, lambda item: item.approval_id is not None)
+        approved = await client.post(
+            f"/api/approvals/{pending.approval_id}/resolve",
+            json={"resolution": "approved"},
+        )
+        assert approved.status_code == 200
+        uncertain = await self._wait(service, operation.id, lambda item: item.state == "uncertain")
+        endpoint = f"/api/projects/proj-1/tracker-links/operations/{operation.id}"
+        refused = await client.post(
+            endpoint + "/retry",
+            json={"expectedVersion": uncertain.version, "requestId": "unsafe"},
+        )
+        assert refused.status_code == 409
+        blank = await client.post(
+            endpoint + "/reconcile",
+            json={"expectedVersion": uncertain.version, "resolution": "not_applied", "evidence": " "},
+        )
+        assert blank.status_code == 422
+        reconciled = await client.post(
+            endpoint + "/reconcile",
+            json={
+                "expectedVersion": uncertain.version,
+                "resolution": "not_applied",
+                "evidence": "Verified no write in controlled provider audit log.",
+            },
+        )
+        assert reconciled.status_code == 200
+        assert reconciled.json()["reconciliation"]["actor"] == "operator"
+        stale = await client.post(
+            endpoint + "/reconcile",
+            json={"expectedVersion": uncertain.version, "resolution": "applied", "evidence": "Stale decision"},
+        )
+        assert stale.status_code == 409
+        body = {"expectedVersion": reconciled.json()["version"], "requestId": "retry"}
+        retry = await client.post(endpoint + "/retry", json=body)
+        repeated = await client.post(endpoint + "/retry", json=body)
+        assert retry.status_code == repeated.status_code == 201
+        assert retry.json()["id"] == repeated.json()["id"] != operation.id
+        assert retry.json()["retryOfId"] == operation.id
+        new_pending = await self._wait(service, retry.json()["id"], lambda item: item.approval_id is not None)
+        assert new_pending.approval_id != pending.approval_id
+        assert new_pending.state == "awaiting_approval"
+        dispatch.assert_awaited_once()
+
+    async def test_deleted_parent_keeps_readable_history_and_refuses_retry(self, client, app, session_factory):
+        from sqlalchemy import delete
+
+        from backend.models.db import ApprovalRow, JobRow, ProjectRow
+
+        service, operation = await self._operation(client, app, session_factory)
+        await self._wait(service, operation.id, lambda item: item.approval_id is not None)
+        async with session_factory() as session:
+            await session.execute(delete(ApprovalRow).where(ApprovalRow.job_id == "operation-job"))
+            await session.execute(delete(JobRow).where(JobRow.id == "operation-job"))
+            await session.execute(delete(ProjectRow).where(ProjectRow.id == "proj-1"))
+            await session.commit()
+        service.wake()
+        failed = await self._wait(service, operation.id, lambda item: item.state == "failed")
+        endpoint = f"/api/projects/proj-1/tracker-links/operations/{operation.id}"
+        detail = await client.get(endpoint)
+        assert detail.status_code == 200
+        assert detail.json()["jobId"] is None and detail.json()["projectId"] is None
+        assert detail.json()["jobRef"] == "operation-job" and detail.json()["projectRef"] == "proj-1"
+        assert detail.json()["approvalSnapshot"]["id"] == failed.approval_ref
+        retry = await client.post(
+            endpoint + "/retry",
+            json={"expectedVersion": failed.version, "requestId": "missing-owner"},
+        )
+        assert retry.status_code == 409
+        assert len((await client.get("/api/projects/proj-1/tracker-links/operations")).json()["items"]) == 1
+
+    def _mcp_tracker(self, session_factory, approval_service, service):
+        from unittest.mock import AsyncMock
+
+        from backend.mcp.server import create_mcp_server
+
+        server = create_mcp_server(
+            session_factory=session_factory,
+            runtime_service=AsyncMock(),
+            approval_service=approval_service,
+            merge_service=AsyncMock(),
+            tracker_write_service=service,
+        )
+        return server._tool_manager._tools["codeplane_tracker"].fn
+
+    async def test_mcp_keeps_originating_task_link_as_live_dispatch_dependency(
+        self,
+        client,
+        app,
+        session_factory,
+        approval_service,
+        monkeypatch,
+    ):
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        from sqlalchemy import delete
+
+        from backend.models.db import TaskLinkRow
+        from backend.persistence.database import serialized_write
+        from backend.persistence.task_link_repo import TaskLinkRepository
+
+        dispatch = AsyncMock(return_value={"id": "must-not-send"})
+        monkeypatch.setattr("backend.services.tracker_resolution.dispatch_tracker_write", dispatch)
+        service, original = await self._operation(client, app, session_factory)
+        async with serialized_write(session_factory) as session:
+            task = await TaskLinkRepository(session).create_manual(
+                project_id="proj-1",
+                repo_path="/test/repo",
+                tracker_link_id=original.tracker_link_ref,
+                tracker_ticket_ref="owner/repo#7",
+                prompt_override="Originating task",
+            )
+            await TaskLinkRepository(session).set_job_id(task.id, "operation-job")
+        tool = self._mcp_tracker(session_factory, approval_service, service)
+        caller = asyncio.create_task(
+            tool(
+                action="comment",
+                job_id="operation-job",
+                value="Origin must remain live.",
+                request_id="origin-required",
+            )
+        )
+        try:
+            operation = None
+            for _ in range(200):
+                matches = [
+                    item
+                    for item in await service.list_operations("proj-1")
+                    if item.source_key == "mcp:operation-job:origin-required"
+                ]
+                if matches and matches[0].approval_id is not None:
+                    operation = matches[0]
+                    break
+                await asyncio.sleep(0.01)
+            assert operation is not None
+            async with serialized_write(session_factory) as session:
+                await session.execute(delete(TaskLinkRow).where(TaskLinkRow.id == task.id))
+            await approval_service.resolve(operation.approval_id, "approved")
+            outcome = await asyncio.wait_for(caller, 3)
+            assert outcome["state"] == "failed"
+            persisted = await service.get_operation(operation.id)
+            assert persisted.task_link_ref == task.id and persisted.task_link_id is None
+            assert persisted.error_code == "dependency_deleted"
+            dispatch.assert_not_awaited()
+        finally:
+            if not caller.done():
+                caller.cancel()
+            await asyncio.gather(caller, return_exceptions=True)
+
+    async def test_mcp_list_recovers_history_without_a_live_job(
+        self,
+        client,
+        app,
+        session_factory,
+        approval_service,
+    ):
+        from sqlalchemy import delete
+
+        from backend.models.db import ApprovalRow, JobRow
+        from backend.persistence.database import serialized_write
+
+        service, operation = await self._operation(client, app, session_factory)
+        await self._wait(service, operation.id, lambda item: item.approval_id is not None)
+        async with serialized_write(session_factory) as session:
+            await session.execute(delete(ApprovalRow).where(ApprovalRow.job_id == "operation-job"))
+            await session.execute(delete(JobRow).where(JobRow.id == "operation-job"))
+        await self._wait(service, operation.id, lambda item: item.state == "failed")
+        tool = self._mcp_tracker(session_factory, approval_service, service)
+        listed = await tool(action="list", job_id="operation-job")
+        assert "items" in listed, listed
+        assert len(listed["items"]) == 1
+        assert listed["items"][0]["id"] == operation.id
+        assert listed["items"][0]["jobId"] is None
+        assert listed["items"][0]["jobRef"] == "operation-job"
+        detail = await tool(action="status", job_id="operation-job", operation_id=operation.id)
+        assert detail["id"] == operation.id
+
+
 class TestCreateTrackerLink:
     @pytest.mark.asyncio
     async def test_copilot_credential_is_rejected_without_saving_link(

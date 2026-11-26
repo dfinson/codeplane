@@ -1,0 +1,113 @@
+{
+  "source_commit": "287483a7cd931589ce67140e915116896fa4f39a",
+  "license": "backend/compat/traceforge.LICENSE",
+  "source": "Controlled fixture produced by the actual transition wheel, not user data or policy corpus.",
+  "database_sha256": "a4d97d342fc3b4e2f9a8cd5d03d84dbe7d4e860d438f392f13865692284db93c",
+  "schema": [
+    "CREATE TABLE alembic_version (\n\tversion_num VARCHAR(32) NOT NULL, \n\tCONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)\n)",
+    "CREATE TABLE budget_counters (\n            session_id TEXT NOT NULL,\n            dimension TEXT NOT NULL,\n            key TEXT NOT NULL,\n            count INTEGER NOT NULL,\n            PRIMARY KEY (session_id, dimension, key)\n        )",
+    "CREATE TABLE content_hashes (\n            repo TEXT NOT NULL,\n            file_path TEXT NOT NULL,\n            sha256 TEXT NOT NULL,\n            updated_at TEXT NOT NULL,\n            updated_by_session TEXT,\n            PRIMARY KEY (repo, file_path)\n        )",
+    "CREATE TABLE drift_baselines (\n            agent_model TEXT NOT NULL,\n            repo TEXT NOT NULL,\n            phase_counts_json TEXT NOT NULL,\n            total_events INTEGER NOT NULL,\n            updated_at TEXT NOT NULL,\n            PRIMARY KEY (agent_model, repo)\n        )",
+    "CREATE TABLE gate_endpoints (\n            session_id TEXT PRIMARY KEY,\n            sock_path TEXT NOT NULL,\n            pid INTEGER NOT NULL,\n            token TEXT,\n            registered_at TEXT NOT NULL DEFAULT (datetime('now'))\n        )",
+    "CREATE TABLE mcp_profile_attributes (\n            server TEXT NOT NULL,\n            tool_name TEXT NOT NULL,\n            attr_type TEXT NOT NULL,\n            attr_value TEXT NOT NULL,\n            PRIMARY KEY (server, tool_name, attr_type, attr_value)\n        )",
+    "CREATE TABLE mcp_profiles (\n            server TEXT NOT NULL,\n            tool_name TEXT NOT NULL,\n            description_hash TEXT NOT NULL,\n            schema_hash TEXT NOT NULL,\n            registered_effect TEXT,\n            clearance TEXT,\n            first_seen TEXT NOT NULL,\n            last_seen TEXT NOT NULL,\n            PRIMARY KEY (server, tool_name)\n        )",
+    "CREATE TABLE processed_events (\n            source_event_key TEXT PRIMARY KEY,\n            session_id TEXT NOT NULL,\n            session_meta_json TEXT,\n            processed_at TEXT NOT NULL\n        )",
+    "CREATE TABLE session_state (\n            session_id TEXT PRIMARY KEY,\n            total_tool_calls INTEGER NOT NULL DEFAULT 0,\n            total_tokens INTEGER NOT NULL DEFAULT 0,\n            elapsed_seconds REAL NOT NULL DEFAULT 0.0,\n            pressure INTEGER NOT NULL DEFAULT 0,\n            phase_window_json TEXT NOT NULL DEFAULT '[]',\n            last_assistant_json TEXT,\n            last_user_json TEXT,\n            event_count INTEGER NOT NULL DEFAULT 0,\n            dropped_events INTEGER NOT NULL DEFAULT 0,\n            last_sequence INTEGER,\n            last_event_id TEXT,\n            updated_at TEXT NOT NULL DEFAULT ''\n        )",
+    "CREATE TABLE session_summaries (\n            session_id TEXT PRIMARY KEY,\n            repo TEXT,\n            agent_model TEXT,\n            started_at TEXT NOT NULL,\n            ended_at TEXT,\n            total_events INTEGER,\n            dropped_events INTEGER DEFAULT 0,\n            budget_snapshot_json TEXT,\n            recommendation_counts_json TEXT,\n            drift_max REAL\n        )",
+    "CREATE TABLE taint_entries (\n            session_id TEXT NOT NULL,\n            ordinal INTEGER NOT NULL,\n            event_id TEXT NOT NULL,\n            source_event_key TEXT NOT NULL,\n            clearance TEXT NOT NULL,\n            source TEXT NOT NULL,\n            payload_pointer TEXT NOT NULL,\n            PRIMARY KEY (session_id, ordinal)\n        )",
+    "CREATE TABLE trust_grants (\n            session_id TEXT NOT NULL,\n            ordinal INTEGER NOT NULL,\n            key TEXT NOT NULL,\n            granted_at TEXT NOT NULL,\n            ttl_seconds REAL NOT NULL,\n            reason TEXT NOT NULL DEFAULT '',\n            PRIMARY KEY (session_id, ordinal)\n        )"
+  ],
+  "tables": {
+    "alembic_version": [
+      {
+        "version_num": "0001_initial"
+      }
+    ],
+    "budget_counters": [
+      {
+        "session_id": "legacy-job",
+        "dimension": "effect",
+        "key": "read_only",
+        "count": 1
+      },
+      {
+        "session_id": "legacy-job",
+        "dimension": "capability",
+        "key": "filesystem_read",
+        "count": 1
+      },
+      {
+        "session_id": "legacy-job",
+        "dimension": "scope",
+        "key": "artifact.source_code",
+        "count": 1
+      },
+      {
+        "session_id": "legacy-job",
+        "dimension": "role",
+        "key": "retriever.file_browser",
+        "count": 1
+      },
+      {
+        "session_id": "legacy-job",
+        "dimension": "phase",
+        "key": "exploration",
+        "count": 1
+      },
+      {
+        "session_id": "legacy-job",
+        "dimension": "mechanism",
+        "key": "filesystem",
+        "count": 1
+      },
+      {
+        "session_id": "legacy-job",
+        "dimension": "action",
+        "key": "retrieve.read",
+        "count": 1
+      }
+    ],
+    "content_hashes": [],
+    "drift_baselines": [],
+    "gate_endpoints": [],
+    "mcp_profile_attributes": [],
+    "mcp_profiles": [],
+    "processed_events": [
+      {
+        "source_event_key": "exec:old-call",
+        "session_id": "legacy-job",
+        "session_meta_json": "{\"classification\": {\"mechanism\": \"filesystem\", \"effect\": \"read_only\", \"scope\": [\"artifact.source_code\"], \"role\": [\"retriever.file_browser\"], \"action\": [\"retrieve.read\"], \"capability\": [\"filesystem_read\"], \"phase_map\": [{\"phase\": \"exploration\", \"actions\": [\"retrieve.read\"], \"scopes\": [\"artifact.source_code\"], \"roles\": [\"retriever.file_browser\"]}]}, \"recommendation\": null, \"risk\": {\"score\": 12, \"level\": \"safe\", \"confidence\": \"medium\", \"factors\": [], \"mitre\": []}, \"budget\": {\"total_tool_calls\": 1, \"total_tokens\": 0, \"elapsed_seconds\": 0.0, \"pressure\": false, \"by_effect\": [[\"read_only\", 1]], \"by_capability\": [[\"filesystem_read\", 1]], \"by_scope\": [[\"artifact.source_code\", 1]], \"by_role\": [[\"retriever.file_browser\", 1]], \"by_phase\": [[\"exploration\", 1]], \"by_mechanism\": [[\"filesystem\", 1]], \"by_action\": [[\"retrieve.read\", 1]], \"by_structure\": []}, \"evidence\": null, \"mcp_alerts\": []}",
+        "processed_at": "2026-11-19T12:08:05.796233+00:00"
+      }
+    ],
+    "session_state": [
+      {
+        "session_id": "legacy-job",
+        "total_tool_calls": 1,
+        "total_tokens": 0,
+        "elapsed_seconds": 0.0,
+        "pressure": 0,
+        "phase_window_json": "[\"exploration\"]",
+        "last_assistant_json": "cp-1ec59827b6ae",
+        "last_user_json": null,
+        "event_count": 1,
+        "dropped_events": 0,
+        "last_sequence": null,
+        "last_event_id": null,
+        "updated_at": "2026-11-19T12:08:05.797695+00:00"
+      }
+    ],
+    "session_summaries": [],
+    "taint_entries": [],
+    "trust_grants": [
+      {
+        "session_id": "legacy-job",
+        "ordinal": 0,
+        "key": "readonly_shell_locked",
+        "granted_at": "2026-11-19T12:08:05.797686+00:00",
+        "ttl_seconds": 3600.0,
+        "reason": "original operator scope"
+      }
+    ]
+  }
+}

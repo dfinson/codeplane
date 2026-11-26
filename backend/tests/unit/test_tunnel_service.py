@@ -5,6 +5,7 @@ import json
 import subprocess as real_subprocess
 import sys
 import threading
+import urllib.error
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import MagicMock, patch
@@ -37,6 +38,13 @@ from backend.services.sharing.tunnel_service import (
 if TYPE_CHECKING:
     import subprocess
     from collections.abc import Iterator
+    from pathlib import Path
+
+
+@pytest.fixture(autouse=True)
+def _isolated_tunnel_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tunnel_service, "get_codeplane_dir", lambda: tmp_path)
+    monkeypatch.setattr(tunnel_service, "_DEVTUNNEL_FALLBACK_PATHS", ())
 
 
 def _as_popen(proc: _FakeProc) -> subprocess.Popen[str]:
@@ -348,6 +356,94 @@ class TestBoundedOutputRead:
 # ---------------------------------------------------------------------------
 # #15 — Watchdog local health check
 # ---------------------------------------------------------------------------
+
+
+class TestWatchdogRelayProbeUnderAccessControl:
+    """The relay probe must not treat an access-control rejection as a fault.
+
+    Observed live: with Cloudflare Access in front of the hostname, the relay
+    probe (urllib, no session cookie, no browser User-Agent) is answered with
+    403. ``urllib`` raises ``HTTPError``, which subclasses ``URLError``, so the
+    old blanket ``except`` reported the relay as broken on every single check.
+    The watchdog then restarted a perfectly healthy connector roughly every
+    100s, and each restart took the public hostname down for a few seconds --
+    surfacing to users as intermittent 502s.
+    """
+
+    @staticmethod
+    def _watchdog() -> TunnelWatchdog:
+        return TunnelWatchdog(
+            tunnel_url="https://example.codeplane.dev",
+            restart_command=["echo"],
+            proc=_as_popen(_FakeProc(poll_result=None)),
+            label="cloudflare",
+            local_port=8080,
+        )
+
+    @staticmethod
+    def _http_error(code: int) -> urllib.error.HTTPError:
+        return urllib.error.HTTPError(
+            url="https://example.codeplane.dev/api/health",
+            code=code,
+            msg="err",
+            hdrs=None,  # type: ignore[arg-type]
+            fp=None,
+        )
+
+    @pytest.mark.parametrize("code", [401, 403, 404, 200, 302])
+    def test_relay_probe_treats_a_definite_status_as_reachable(self, code: int) -> None:
+        watchdog = self._watchdog()
+        with patch("urllib.request.urlopen", side_effect=self._http_error(code)):
+            assert watchdog._health_ok(use_tunnel_url=True) is True
+
+    @pytest.mark.parametrize("code", [500, 502, 503, 504, 530, 599])
+    def test_relay_probe_still_fails_on_server_error(self, code: int) -> None:
+        watchdog = self._watchdog()
+        with patch("urllib.request.urlopen", side_effect=self._http_error(code)):
+            assert watchdog._health_ok(use_tunnel_url=True) is False
+
+    @pytest.mark.parametrize("code", [500, 502, 503, 504, 530, 599])
+    def test_relay_probe_fails_on_server_error_returned_as_a_response(self, code: int) -> None:
+        """Some stacks return the status instead of raising; both paths must agree."""
+        watchdog = self._watchdog()
+        resp = MagicMock()
+        resp.status = code
+        resp.__enter__ = MagicMock(return_value=resp)
+        resp.__exit__ = MagicMock(return_value=False)
+        with patch("urllib.request.urlopen", return_value=resp):
+            assert watchdog._health_ok(use_tunnel_url=True) is False
+
+    def test_relay_probe_still_fails_when_the_edge_is_unreachable(self) -> None:
+        watchdog = self._watchdog()
+        with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("no route")):
+            assert watchdog._health_ok(use_tunnel_url=True) is False
+
+    @pytest.mark.parametrize("code", [401, 403, 500, 502])
+    def test_local_origin_probe_is_unchanged_and_still_demands_200(self, code: int) -> None:
+        """The relaxation applies only to the relay probe.
+
+        The local origin is not behind Access, so anything other than 200 there
+        is a genuine origin failure and must keep suppressing restarts.
+        """
+        watchdog = self._watchdog()
+        with patch("urllib.request.urlopen", side_effect=self._http_error(code)):
+            assert watchdog._health_ok() is False
+            assert watchdog._origin_ok() is False
+
+    @pytest.mark.parametrize(("code", "restarts"), [(403, 0), (530, 2)])
+    def test_relay_recovery_distinguishes_access_gates_from_missing_connectors(self, code: int, restarts: int) -> None:
+        watchdog = self._watchdog()
+        with (
+            patch("urllib.request.urlopen", side_effect=self._http_error(code)),
+            patch.object(watchdog, "_restart_process") as restart,
+            patch.object(watchdog, "_origin_ok", return_value=True),
+            patch.object(watchdog._stop_event, "wait") as wait,
+        ):
+            cycles = (watchdog._FAIL_THRESHOLD + 2) * watchdog._RELAY_CHECK_FREQUENCY
+            wait.side_effect = [False] * cycles + [True]
+            watchdog._run()
+            assert restart.call_count == restarts
+            assert wait.call_count == cycles + 1
 
 
 class TestWatchdogLocalHealthCheck:
@@ -871,7 +967,12 @@ class TestExternalTunnelOwnership:
         return_value=[{"tunnelId": "my-stable-name.usw2"}],
     )
     def test_external_devtunnel_resolves_origin_without_spawning(self, _mock) -> None:
-        with patch("backend.services.sharing.tunnel_service.subprocess.Popen") as mock_popen:
+        with (
+            patch("backend.services.sharing.tunnel_service.subprocess.Popen") as mock_popen,
+            patch.object(
+                tunnel_service, "_run_capture", return_value=real_subprocess.CompletedProcess([], 0, "{}", "")
+            ),
+        ):
             handle = start_remote_access(
                 RemoteProvider.devtunnel,
                 port=8080,
@@ -1201,6 +1302,165 @@ class TestDevtunnelLoginDetection:
         assert "devtunnel user login" in str(exc_info.value)
 
 
+class TestStableDevtunnelIdentity:
+    @staticmethod
+    def _record(tmp_path: Path) -> None:
+        (tmp_path / "devtunnel.json").write_text(
+            json.dumps(
+                {
+                    "tunnelName": "cpl-remembered",
+                    "port": 8080,
+                    "origin": "https://old-8080.usw2.devtunnels.ms",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    @pytest.mark.parametrize("explicit", [None, "cpl-explicit"])
+    def test_remembered_identity_beats_decoy_but_not_explicit_name(self, tmp_path: Path, explicit: str | None) -> None:
+        self._record(tmp_path)
+        expected = explicit or "cpl-remembered"
+        origin = "https://assigned-id-8080.usw2.devtunnels.ms"
+
+        def capture(args: list[str]) -> real_subprocess.CompletedProcess[str]:
+            assert args[1] != "create"
+            body = {"ports": [{"portNumber": 8080, "portUri": origin + "/"}]}
+            return real_subprocess.CompletedProcess(args, 0, stdout=json.dumps(body), stderr="")
+
+        with (
+            patch.object(
+                tunnel_service,
+                "_list_devtunnels",
+                return_value=[
+                    {"tunnelId": "cpl-decoy.usw2"},
+                    {"tunnelId": "cpl-remembered.usw2"},
+                    {"tunnelId": "cpl-explicit.usw2"},
+                ],
+            ),
+            patch.object(tunnel_service, "_run_capture", side_effect=capture),
+            patch.object(tunnel_service, "_spawn_connector", return_value=_as_popen(_FakeProc())) as spawn,
+            patch.object(tunnel_service, "_wait_for_startup"),
+            patch.object(tunnel_service, "_start_output_drain"),
+            patch.object(tunnel_service.log, "warning") as warning,
+        ):
+            actual_origin, _, name, reusable = _start_devtunnel(8080, tunnel_name=explicit)
+        assert (actual_origin, name, reusable) == (origin, expected, True)
+        assert spawn.call_args.args[0][1:] == ["host", expected]
+        assert json.loads((tmp_path / "devtunnel.json").read_text()) == {
+            "tunnelName": expected,
+            "port": 8080,
+            "origin": origin,
+        }
+        warning.assert_called_once_with(
+            "devtunnel_origin_changed", previous_origin="https://old-8080.usw2.devtunnels.ms", origin=origin
+        )
+
+    def test_generated_name_is_saved_before_hosting(self, tmp_path: Path) -> None:
+        def spawn(args: list[str]) -> subprocess.Popen[str]:
+            record = json.loads((tmp_path / "devtunnel.json").read_text())
+            assert record["tunnelName"] == args[2]
+            return _as_popen(_FakeProc())
+
+        with (
+            patch.object(tunnel_service, "_find_existing_codeplane_tunnel", return_value=None),
+            patch.object(tunnel_service, "_lookup_devtunnel", return_value=(True, "usw2")),
+            patch.object(tunnel_service, "_run_capture", return_value=real_subprocess.CompletedProcess([], 0, "", "")),
+            patch.object(tunnel_service, "_spawn_connector", side_effect=spawn),
+            patch.object(tunnel_service, "_wait_for_startup"),
+            patch.object(tunnel_service, "_start_output_drain"),
+        ):
+            origin, _, name, reusable = _start_devtunnel(8080)
+        assert name.startswith("cpl-")
+        assert origin == f"https://{name}-8080.usw2.devtunnels.ms"
+        assert reusable is False
+        saved = tunnel_service._read_stable_devtunnel()
+        assert saved is not None
+        assert saved.name == name
+
+    @pytest.mark.parametrize(
+        "contents",
+        [
+            "{",
+            "[]",
+            '{"tunnelName": "-invalid", "port":8080, "origin":"https://x.devtunnels.ms"}',
+            '{"tunnelName": "cpl-test", "port":true, "origin":"https://x.devtunnels.ms"}',
+            '{"tunnelName": "cpl-test", "port":0, "origin":"https://x.devtunnels.ms"}',
+            '{"tunnelName": "cpl-test", "port":8080, "origin":"https://unrelated.example"}',
+        ],
+    )
+    def test_invalid_record_does_not_select_another_tunnel(self, tmp_path: Path, contents: str) -> None:
+        (tmp_path / "devtunnel.json").write_text(contents, encoding="utf-8")
+        with (
+            patch.object(tunnel_service, "_run_capture") as capture,
+            patch.object(tunnel_service, "_spawn_connector") as spawn,
+            pytest.raises(TunnelStartError, match="Dev Tunnel identity"),
+        ):
+            _start_devtunnel(8080)
+        capture.assert_not_called()
+        spawn.assert_not_called()
+
+    def test_save_failure_does_not_leave_a_connector_running(self) -> None:
+        with (
+            patch.object(tunnel_service, "_lookup_devtunnel", return_value=(True, "usw2")),
+            patch.object(tunnel_service, "_run_capture", return_value=real_subprocess.CompletedProcess([], 0, "", "")),
+            patch.object(tunnel_service, "write_json_atomic", side_effect=PermissionError("read only")),
+            patch.object(tunnel_service, "_spawn_connector") as spawn,
+            pytest.raises(TunnelStartError, match="Cannot save"),
+        ):
+            _start_devtunnel(8080, tunnel_name="cpl-test")
+        spawn.assert_not_called()
+
+    @pytest.mark.parametrize("nested", [False, True])
+    def test_external_tunnel_uses_assigned_origin_without_writing_state(self, tmp_path: Path, nested: bool) -> None:
+        payload = {"ports": [{"portNumber": 8080, "portUri": "https://assigned-8080.use.devtunnels.ms"}]}
+        body = {"tunnel": payload} if nested else payload
+        with (
+            patch.object(tunnel_service, "_lookup_devtunnel", return_value=(True, "use")),
+            patch.object(
+                tunnel_service,
+                "_run_capture",
+                return_value=real_subprocess.CompletedProcess([], 0, json.dumps(body), ""),
+            ),
+            patch.object(tunnel_service, "_spawn_connector") as spawn,
+        ):
+            origin = _external_tunnel_origin(
+                RemoteProvider.devtunnel, port=8080, tunnel_name="cpl-test", cloudflare_hostname=None
+            )
+        assert origin == "https://assigned-8080.use.devtunnels.ms"
+        assert not (tmp_path / "devtunnel.json").exists()
+        spawn.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "payload",
+        [[], {"tunnel": None}, {"ports": [None]}, {"ports": [{"portNumber": 8080, "portUri": "http://bad.example"}]}],
+    )
+    def test_unavailable_assigned_uri_has_an_explicit_alias_fallback(self, payload: object) -> None:
+        with (
+            patch.object(
+                tunnel_service,
+                "_run_capture",
+                return_value=real_subprocess.CompletedProcess([], 0, json.dumps(payload), ""),
+            ),
+            patch.object(tunnel_service.log, "warning") as warning,
+        ):
+            assert (
+                tunnel_service._devtunnel_origin("cpl-test", 8080, "use") == "https://cpl-test-8080.use.devtunnels.ms"
+            )
+        warning.assert_called_once_with("devtunnel_port_uri_unavailable", tunnel="cpl-test", port=8080)
+
+    def test_installer_location_is_used_when_path_lookup_fails(self, tmp_path: Path) -> None:
+        executable = tmp_path / ("devtunnel.exe" if sys.platform == "win32" else "devtunnel")
+        executable.write_text("test executable", encoding="utf-8")
+        executable.chmod(0o755)
+        with (
+            patch.object(tunnel_service.shutil, "which", return_value=None),
+            patch.object(tunnel_service, "_DEVTUNNEL_FALLBACK_PATHS", (executable,)),
+            patch.object(tunnel_service.subprocess, "run") as run,
+        ):
+            _run_capture(["devtunnel", "user", "show"])
+        assert run.call_args.args[0] == [str(executable), "user", "show"]
+
+
 class TestDevtunnelPortRegistration:
     """Reuse hinges on what the service reports, not on error wording.
 
@@ -1323,13 +1583,23 @@ class TestCloudflaredDetectionIsPortable:
     TOKEN = base64.b64encode(json.dumps({"a": "acct", "t": "tunnel-uuid", "s": "secret"}).encode()).decode()
 
     @classmethod
-    def _proc(cls, pid: int, name: str, cmdline: list[str] | None = None) -> object:
+    def _proc(
+        cls,
+        pid: int,
+        name: str,
+        cmdline: list[str] | None = None,
+        environ: dict[str, str] | None = None,
+    ) -> object:
         stub = MagicMock()
         stub.info = {
             "pid": pid,
             "name": name,
             "cmdline": cmdline if cmdline is not None else ["cloudflared", "tunnel", "run", "--token", cls.TOKEN],
         }
+        # Real connectors (``cloudflared tunnel run``) carry the token via the
+        # TUNNEL_TOKEN env var rather than argv; default to no env match so
+        # tests exercising cmdline-only matching stay unaffected.
+        stub.environ.return_value = environ if environ is not None else {}
         return stub
 
     def test_detects_windows_executable_name(self) -> None:
@@ -1410,6 +1680,72 @@ class TestCloudflaredDetectionIsPortable:
             patch.object(psutil, "process_iter", return_value=[self._proc(555, "cloudflared")]),
             patch.object(psutil, "Process", return_value=parent),
             patch.object(os, "getpid", return_value=111),
+        ):
+            assert _cloudflared_already_running(self.TOKEN) is False
+
+    def test_detects_a_token_run_connector_via_its_env_var(self) -> None:
+        """``_start_cloudflare`` spawns ``cloudflared tunnel run`` with the token
+        passed via the ``TUNNEL_TOKEN`` env var, not argv. Before this fix,
+        cmdline-only matching never recognized such a connector as ours, so
+        every ``cpl up --remote --provider cloudflare`` spawned a duplicate
+        connector alongside it. Cloudflare's edge then load-balanced across
+        both, causing intermittent 502s against the orphaned one until its
+        heartbeat lapsed.
+        """
+        import psutil
+
+        proc = self._proc(
+            999,
+            "cloudflared.exe",
+            cmdline=["cloudflared", "tunnel", "--no-autoupdate", "run"],
+            environ={"TUNNEL_TOKEN": self.TOKEN},
+        )
+        with (
+            patch.object(psutil, "process_iter", return_value=[proc]),
+            patch.object(psutil, "Process", side_effect=psutil.NoSuchProcess(1)),
+        ):
+            assert _cloudflared_already_running(self.TOKEN) is True
+
+    def test_ignores_a_token_run_connector_for_a_different_tunnel_via_env(self) -> None:
+        import psutil
+
+        other = base64.b64encode(json.dumps({"a": "b", "t": "someone-else", "s": "x"}).encode()).decode()
+        proc = self._proc(
+            999,
+            "cloudflared.exe",
+            cmdline=["cloudflared", "tunnel", "--no-autoupdate", "run"],
+            environ={"TUNNEL_TOKEN": other},
+        )
+        with (
+            patch.object(psutil, "process_iter", return_value=[proc]),
+            patch.object(psutil, "Process", side_effect=psutil.NoSuchProcess(1)),
+        ):
+            assert _cloudflared_already_running(self.TOKEN) is False
+
+    def test_detects_same_tunnel_after_token_rotation(self) -> None:
+        import psutil
+
+        rotated = base64.b64encode(json.dumps({"a": "acct", "t": "tunnel-uuid", "s": "rotated"}).encode()).decode()
+        proc = self._proc(
+            999,
+            "cloudflared.exe",
+            cmdline=["cloudflared", "tunnel", "run"],
+            environ={"TUNNEL_TOKEN": rotated},
+        )
+        with (
+            patch.object(psutil, "process_iter", return_value=[proc]),
+            patch.object(psutil, "Process", side_effect=psutil.NoSuchProcess(1)),
+        ):
+            assert _cloudflared_already_running(self.TOKEN) is True
+
+    def test_ignores_a_connector_whose_environ_is_unreadable(self) -> None:
+        import psutil
+
+        proc = self._proc(999, "cloudflared.exe", cmdline=["cloudflared", "tunnel", "--no-autoupdate", "run"])
+        proc.environ.side_effect = psutil.AccessDenied(999)
+        with (
+            patch.object(psutil, "process_iter", return_value=[proc]),
+            patch.object(psutil, "Process", side_effect=psutil.NoSuchProcess(1)),
         ):
             assert _cloudflared_already_running(self.TOKEN) is False
 
