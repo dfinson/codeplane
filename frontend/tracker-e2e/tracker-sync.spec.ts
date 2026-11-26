@@ -4,6 +4,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -292,7 +293,7 @@ test.beforeAll(async () => {
     }
     await assertPortAvailable(backendPort);
     const jiraBaseUrl = await startFakeJira();
-    codeplaneHome = await mkdtemp(resolve(repoRoot, ".tracker-e2e-"));
+    codeplaneHome = await mkdtemp(resolve(tmpdir(), "codeplane-tracker-e2e-"));
     memberRepoPath = resolve(codeplaneHome, "member-repo");
     addedRepoPath = resolve(codeplaneHome, "added-repo");
     await Promise.all([
@@ -321,6 +322,7 @@ test.beforeAll(async () => {
         env: {
           ...process.env,
           CODEPLANE_HOME: codeplaneHome,
+          CODEPLANE_E2E_FAKE_AGENT: "1",
           PYTHONIOENCODING: "utf-8",
           PYTHONUTF8: "1",
         },
