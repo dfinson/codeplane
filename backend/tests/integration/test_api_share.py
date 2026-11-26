@@ -113,7 +113,7 @@ async def test_open_stream_stops_before_delivering_queued_events(seed_job, sessi
     replay = AsyncMock(side_effect=lambda conn, *_: conn.send("event: replay\ndata: {}\n\n"))
     with patch.object(sse_manager, "replay_from_factory", replay):
         response = await stream_shared_events(entry.token, request, svc, sse_manager, session_factory)
-        iterator = response.body_iterator
+        iterator = aiter(response.body_iterator)
         assert await anext(iterator) == "event: session_heartbeat\ndata: {}\n\n"
         replay.assert_awaited_once()
         if invalidation == "revoke":
@@ -133,7 +133,7 @@ async def test_idle_stream_rechecks_revocation_before_heartbeat(seed_job, sessio
     entry = await svc.create_token(job_id)
     request = Request({"type": "http", "headers": []})
     response = await stream_shared_events(entry.token, request, svc, sse_manager, session_factory)
-    iterator = response.body_iterator
+    iterator = aiter(response.body_iterator)
     assert await anext(iterator) == "event: session_heartbeat\ndata: {}\n\n"
     connection = sse_manager._connections[0]
     assert connection.job_id == job_id
