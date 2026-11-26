@@ -59,7 +59,9 @@ export function RepoSettings() {
         fetchCredentials(),
       ]);
       if (generation !== loadGeneration.current) return;
-      const nextCredentials = credentialsResp.credentials ?? [];
+      const nextCredentials = (credentialsResp.credentials ?? []).filter(
+        ({ provider }) => provider === "github" || provider === "jira" || provider === "azure_devops",
+      );
       setCredentials(nextCredentials);
       setSelectedCredentialId((current) => current || nextCredentials[0]?.id || "");
       setProject(proj);

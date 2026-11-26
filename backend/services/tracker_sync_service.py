@@ -33,7 +33,7 @@ class TrackerSyncError(Exception):
 
 
 class TrackerLinkValidationError(TrackerSyncError):
-    """Raised when a provider rejects an external reference before attachment."""
+    """Raised when a credential or external reference is invalid before attachment."""
 
 
 class TrackerSyncService:
@@ -94,7 +94,7 @@ class TrackerSyncService:
             raise TrackerSyncError(f"Credential '{credential_id}' could not be resolved")
         adapter = self._adapters.get(credential["provider"])
         if adapter is None:
-            raise TrackerSyncError(f"Unsupported tracker provider: {credential['provider']}")
+            raise TrackerLinkValidationError(f"Unsupported tracker provider: {credential['provider']}")
         try:
             await adapter.test_connection(
                 base_url=credential["base_url"],

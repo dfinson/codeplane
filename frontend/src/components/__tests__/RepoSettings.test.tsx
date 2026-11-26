@@ -39,6 +39,52 @@ describe("RepoSettings", () => {
     vi.clearAllMocks();
   });
 
+  it.each(["github", "jira", "azure_devops", null] as const)(
+    "excludes Copilot credentials while preserving tracker selection for %s",
+    async (provider) => {
+      vi.mocked(fetchProject).mockResolvedValue({
+        id: "project-1", name: "Alpha project", repoPaths: ["/repo/app"],
+        createdAt: "2024-01-01T00:00:00Z", updatedAt: "2024-01-02T00:00:00Z",
+      });
+      const inferenceCredential = {
+        id: "inference-1", provider: "copilot", label: "Inference only",
+        baseUrl: "", email: null, requiresEmailUpdate: false, createdAt: "2024-01-01T00:00:00Z",
+      };
+      vi.mocked(fetchCredentials).mockResolvedValue({
+        credentials: [
+          inferenceCredential,
+          ...(provider ? [{ ...inferenceCredential, id: "tracker-1", provider, label: "Tracker account" }] : []),
+        ],
+      });
+      vi.mocked(fetchTrackerLinks).mockResolvedValue({ trackerLinks: [] });
+      vi.mocked(createTrackerLink).mockResolvedValue({
+        id: "link-1", projectId: "project-1", credentialId: "tracker-1",
+        externalRef: "acme/1", createdAt: "2024-01-01T00:00:00Z", summary: null,
+      });
+      render(
+        <MemoryRouter initialEntries={["/projects/id/project-1"]}>
+          <Routes>
+            <Route path="/projects/id/:projectId" element={<RepoSettings />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Project Settings");
+      expect(screen.queryByRole("option", { name: "Inference only" })).not.toBeInTheDocument();
+      if (provider) {
+        expect(screen.getByLabelText("Select tracker credential")).toHaveValue("tracker-1");
+        fireEvent.change(screen.getByLabelText("Board or org ref"), { target: { value: "acme/1" } });
+        fireEvent.click(screen.getByRole("button", { name: /attach/i }));
+        await waitFor(() => expect(createTrackerLink).toHaveBeenCalledWith(
+          "project-1", { credentialId: "tracker-1", externalRef: "acme/1" },
+        ));
+      } else {
+        expect(screen.queryByLabelText("Select tracker credential")).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: /attach/i })).not.toBeInTheDocument();
+        expect(createTrackerLink).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("allows editing the owning project membership and saves it", async () => {
     const onProjectUpdated = vi.fn();
     vi.mocked(fetchProject).mockResolvedValue({

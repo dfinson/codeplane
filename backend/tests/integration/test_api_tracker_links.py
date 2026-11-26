@@ -52,6 +52,45 @@ async def _create_credential(client: AsyncClient) -> str:
 
 class TestCreateTrackerLink:
     @pytest.mark.asyncio
+    async def test_copilot_credential_is_rejected_without_saving_link(
+        self,
+        client: AsyncClient,
+        session_factory: async_sessionmaker[AsyncSession],
+        mock_tracker_sync_service: AsyncMock,
+    ) -> None:
+        from unittest.mock import AsyncMock
+
+        from backend.services.tracker_sync_service import TrackerSyncService
+
+        await _seed_project(session_factory)
+        credential = await client.post(
+            "/api/settings/credentials",
+            json={
+                "provider": "copilot",
+                "label": "Inference only",
+                "baseUrl": "https://github.com",
+                "pat": "test-inference-token",
+            },
+        )
+        assert credential.status_code == 201
+        adapter = AsyncMock()
+        service = TrackerSyncService(
+            session_factory=session_factory,
+            adapters={"github": adapter, "jira": adapter, "azure_devops": adapter},
+        )
+        mock_tracker_sync_service.test_link.side_effect = service.test_link
+
+        response = await client.post(
+            "/api/projects/proj-1/tracker-links",
+            json={"credentialId": credential.json()["id"], "externalRef": "acme/1"},
+        )
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == "Unsupported tracker provider: copilot"
+        assert (await client.get("/api/projects/proj-1/tracker-links")).json() == {"trackerLinks": []}
+        adapter.test_connection.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_validates_before_starting_insert_transaction(
         self,
         client: AsyncClient,
