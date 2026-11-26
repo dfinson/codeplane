@@ -10,17 +10,20 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
 
+import anyio
 import httpx
 import pytest
 import uvicorn
 from dishka import Provider, Scope, from_context, make_async_container
 from dishka.integrations.fastapi import setup_dishka
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from backend.api.external_gate import router
+from backend.api.external_gate import _connected, router
 from backend.app_factory import _configure_middleware
 from backend.models.domain import ApprovalResolution, StateConflictError
 from backend.models.schemas.external_gate import (
@@ -44,6 +47,60 @@ if TYPE_CHECKING:
 class GateProvider(Provider):
     scope = Scope.APP
     runtime = from_context(provides=RuntimeService)
+
+
+@pytest.mark.parametrize("initial_body", [False, True])
+async def test_disconnect_detection_survives_receive_checkpoint(initial_body):
+    disconnected = asyncio.Event()
+    stopped = asyncio.Event()
+
+    async def receive():
+        nonlocal initial_body
+        await anyio.lowlevel.checkpoint()
+        if initial_body:
+            initial_body = False
+            return {"type": "http.request", "body": b"", "more_body": False}
+        await disconnected.wait()
+        return {"type": "http.disconnect"}
+
+    async def operation():
+        try:
+            disconnected.set()
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
+
+    request = Request({"type": "http"}, receive=receive)
+    source = SimpleNamespace(requests={"request": None})
+    service = SimpleNamespace(retire=AsyncMock())
+    with pytest.raises(HTTPException, match="Gate caller disconnected") as error:
+        await asyncio.wait_for(_connected(request, service, source, "request", operation()), 1)
+    assert error.value.status_code == 409
+    assert stopped.is_set()
+    service.retire.assert_awaited_once_with(source, "request", "caller_disconnected")
+
+
+async def test_connected_operation_completion_cancels_disconnect_receiver():
+    receiving = asyncio.Event()
+    stopped = asyncio.Event()
+
+    async def receive():
+        try:
+            receiving.set()
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
+
+    async def operation():
+        await receiving.wait()
+        return "completed"
+
+    request = Request({"type": "http"}, receive=receive)
+    source = SimpleNamespace(requests={"request": None})
+    service = SimpleNamespace(retire=AsyncMock())
+    assert await asyncio.wait_for(_connected(request, service, source, "request", operation()), 1) == "completed"
+    assert stopped.is_set()
+    service.retire.assert_not_awaited()
 
 
 @pytest.fixture
@@ -381,15 +438,25 @@ async def test_gate_credentials_do_not_grant_operator_or_sibling_authority(
 
 @pytest.mark.parametrize("change", ["reject", "mutate", "cancel", "cancel-api", "detach", "disconnect"])
 async def test_external_pending_decisions_retire_without_execution(
-    change, composed_runtime, local_flowise, gate_server
+    change, composed_runtime, local_flowise, gate_server, monkeypatch
 ):
     host, approvals, _, _ = composed_runtime
     requested: asyncio.Queue[SessionEvent] = asyncio.Queue()
     issued_queue: asyncio.Queue[ExternalGateSourceResponse] = asyncio.Queue()
+    approval_ready = asyncio.Event()
+    polling = asyncio.Event()
+    original_wait = host.external_gates.wait
+
+    async def observe_wait(*args, **kwargs):
+        polling.set()
+        return await original_wait(*args, **kwargs)
+
+    monkeypatch.setattr(host.external_gates, "wait", observe_wait)
 
     async def capture(event):
         if event.kind == "permission.requested" and event.metadata.correlation_id:
             await requested.put(event)
+            approval_ready.set()
 
     host._event_bus.subscribe(capture)
 
@@ -403,17 +470,20 @@ async def test_external_pending_decisions_retire_without_execution(
             assert response.status_code == 200
             if change == "disconnect":
                 endpoint = httpx.URL(gate_server)
-                reader, writer = await asyncio.open_connection(endpoint.host, endpoint.port)
-                writer.write(
-                    (
-                        f"GET /api/gate/{issued.source_id}/requests/request?waitSeconds=25 HTTP/1.1\r\n"
-                        f"Host: {endpoint.host}:{endpoint.port}\r\nAuthorization: Bearer {issued.credential}\r\n\r\n"
-                    ).encode()
-                )
-                await writer.drain()
-                await asyncio.sleep(0.1)
-                writer.close()
-                await writer.wait_closed()
+                _, writer = await asyncio.open_connection(endpoint.host, endpoint.port)
+                try:
+                    writer.write(
+                        (
+                            f"GET /api/gate/{issued.source_id}/requests/request?waitSeconds=25 HTTP/1.1\r\n"
+                            f"Host: {endpoint.host}:{endpoint.port}\r\n"
+                            f"Authorization: Bearer {issued.credential}\r\n\r\n"
+                        ).encode()
+                    )
+                    await writer.drain()
+                    await asyncio.wait_for(asyncio.gather(approval_ready.wait(), polling.wait()), 5)
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
                 async with asyncio.timeout(5):
                     while (
                         await host.external_gates.repo.state(issued.source_id, "request")
@@ -443,7 +513,10 @@ async def test_external_pending_decisions_retire_without_execution(
     elif change == "detach":
         (execution,) = host._native_executions.for_job(job.id)
         assert await host.detach_native(execution.identity) == "cancel-requested"
-    await asyncio.wait_for(asyncio.gather(owner, return_exceptions=True), 10)
+    if change == "disconnect":
+        assert await asyncio.wait_for(owner, 10) is False
+    else:
+        await asyncio.wait_for(asyncio.gather(owner, return_exceptions=True), 10)
     assert local_flowise[1] == []
     approval = await approvals.get(event.payload["approval_id"])
     assert approval.resolution == ApprovalResolution.rejected

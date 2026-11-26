@@ -67,13 +67,16 @@ async def _connected[T](
     task = asyncio.ensure_future(operation)
 
     async def disconnected() -> None:
-        while not await request.is_disconnected():
-            await asyncio.sleep(0.05)
+        # Body-reading routes consume their envelope before starting this sole receiver.
+        # is_disconnected() cancels receives that checkpoint inside HTTP middleware.
+        while (await request.receive())["type"] != "http.disconnect":
+            pass
 
     gone = asyncio.create_task(disconnected())
     try:
         await asyncio.wait((task, gone), return_when=asyncio.FIRST_COMPLETED)
-        if gone.done() or await request.is_disconnected():
+        if gone.done():
+            gone.result()
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
             if request_id in source.requests:
@@ -87,8 +90,9 @@ async def _connected[T](
             await retain_task(asyncio.create_task(service.retire(source, request_id, "caller_disconnected")))
         raise
     finally:
+        task.cancel()
         gone.cancel()
-        await asyncio.gather(gone, return_exceptions=True)
+        await asyncio.gather(task, gone, return_exceptions=True)
 
 
 @router.post("/jobs/{job_id}/external-gates", response_model=ExternalGateSourceResponse)
