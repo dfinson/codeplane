@@ -1191,6 +1191,39 @@ class TestOnEventCallback:
         assert len(failures) == (1 if fails else 0)
         assert None in all_items
         assert sid not in adapter._followup_sessions
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("error_kwargs", "expected"),
+        [
+            (
+                {"error_type": "authentication", "status_code": 401},
+                {"message": "Session failed for the selected Copilot credential"},
+            ),
+            ({"error_type": "server"}, {"message": "Copilot session failed", "error_type": "server"}),
+        ],
+    )
+    async def test_explicit_account_session_error_masks_provider_message(
+        self, adapter: CopilotAdapter, error_kwargs: dict[str, Any], expected: dict[str, str]
+    ) -> None:
+        sid, queue, _session = await self._setup_session(adapter)
+        error = _FakeEventData(message="provider detail token=SECRET_VALUE", **error_kwargs)
+
+        await adapter._process_sdk_event_inner(
+            _FakeSdkSessionEvent("session.error", error),
+            sid,
+            "job-1",
+            "gpt-4o",
+            [False],
+            queue,
+            explicit_account=True,
+        )
+
+        failures = self._drain_queue(queue)
+        assert [e.payload for e in failures if e.kind == EventKind.job_failed] == [expected]
+
+    @pytest.mark.asyncio
+    async def test_session_idle_emits_done(self, adapter: CopilotAdapter) -> None:
         sid, queue, session = await self._setup_session(adapter)
 
         data = _FakeEventData()
