@@ -38,6 +38,7 @@ SHAPES = yaml.safe_load((FIXTURES / "shapes.yaml").read_text(encoding="utf-8"))
 RETAINED = yaml.safe_load((FIXTURES / "retained_expected.yaml").read_text(encoding="utf-8"))
 PRODUCED = FIXTURES / "produced"
 PRODUCED_EXPECTED = yaml.safe_load((PRODUCED / "expected.yaml").read_text(encoding="utf-8"))
+SDK_LOCAL = yaml.safe_load((FIXTURES / "sdk_local" / "expected.yaml").read_text(encoding="utf-8"))
 ANCHOR = datetime(2026, 1, 2, tzinfo=UTC)
 
 
@@ -206,6 +207,139 @@ def test_retained_upstream_recording_or_explicit_shape(name):
         _decoder(name).decode(raw, index)
         for raw, index in zip(records, entry["selected_zero_based_lines"], strict=True)
     ]
+
+
+def _sdk_records(name):
+    provenance = json.loads((FIXTURES / "sdk_local" / "provenance.json").read_text(encoding="utf-8"))
+    assert (
+        hashlib.sha256((FIXTURES / "sdk_local" / provenance["capture_script"]).read_bytes()).hexdigest()
+        == provenance["capture_script_sha256"]
+    )
+    source = provenance["sources"][name]
+    sample = (FIXTURES / "sdk_local" / f"{name}.jsonl").read_bytes()
+    assert hashlib.sha256(sample).hexdigest() == source["sample_sha256"]
+    assert len(sample.splitlines()) == source["physical_records"]
+    return [json.loads(line) for line in sample.splitlines()]
+
+
+@pytest.mark.parametrize("name", SDK_LOCAL)
+def test_actual_local_sdk_bytes_payload_identity_and_absent_usage(name):
+    case = SDK_LOCAL[name]
+    records = _sdk_records(name)
+    decoder = _decoder(name)
+    assert decoder.mapping.framework_version == case["version"]
+    assert decoder.mapping.ingestion_mode == case["transport"]
+    groups = [decoder.decode(deepcopy(raw), index) for index, raw in enumerate(records)]
+    # JSON comparison preserves false/zero distinctions in real tool results.
+    assert json.dumps([_semantic(events) for events in groups], sort_keys=True) == json.dumps(
+        case["expected"], sort_keys=True
+    )
+    events = [event for group in groups for event in group]
+    assert len(events) == len(records)
+    assert len({event.id for event in events}) == len(events)
+    assert [event.model_dump_json() for event in events] == [
+        event.model_dump_json() for group in _decode(name, records) for event in group
+    ]
+    assert not {event.id for event in events}.intersection(
+        event.id for group in _decode(name, records, source_key="separate-source") for event in group
+    )
+    for index, event in enumerate(events):
+        source = event.payload["_codeplane_source"]
+        assert source["record_index"] == index and source["output_index"] == 0
+        assert source["record_sha256"] == hashlib.sha256(_canonical_record(records[index])).hexdigest()
+        assert source["vendor_event_id"] == records[index].get("id")
+        assert source["timestamp_fallback"] is False
+        assert event.timestamp == datetime.fromisoformat(records[index]["timestamp"].replace("Z", "+00:00"))
+        assert event.metadata.source_framework == name
+        assert event.metadata.ingestion_mode == "file_watch"
+        assert not {"input_tokens", "output_tokens", "total_tokens", "cost", "usage", "success"} & event.payload.keys()
+        assert not event.kind.startswith(("llm.", "telemetry."))
+    if name == "maf_transcript":
+        assert all("from_property" in raw and "from" not in raw for raw in records)
+        assert events[2].metadata.motivation.intent == "Inspecting local input."
+        assert events[2].metadata.motivation.source_event_ids == (events[1].id,)
+        assert all("tool_call_id" not in event.payload for event in events)
+
+
+@pytest.mark.parametrize("name", SDK_LOCAL)
+def test_actual_local_sdk_partial_pairs_remain_explicit(name):
+    case = SDK_LOCAL[name]
+    records = _sdk_records(name)
+    pairing = ToolPairing()
+    partial = []
+    for group in _decode(name, records[: case["partial_records"]]):
+        for event in group:
+            result = pairing.process(event)
+            partial.extend(result if isinstance(result, list) else [result] if result is not None else [])
+    partial.extend(pairing.flush())
+    starts = [event for event in partial if event.kind == "tool.call.started"]
+    assert len(starts) == 1
+    assert starts[0].payload["_codeplane_pairing"] == {
+        "status": "unresolved",
+        "reason": "missing_identity" if name == "maf_transcript" else "missing_completion",
+    }
+    assert not any(event.kind in {"tool.call.completed", "tool.call.failed"} for event in partial)
+
+
+@pytest.mark.parametrize("name", SDK_LOCAL)
+async def test_actual_local_sdk_registered_history_retains_bytes_semantics_and_exact_retries(name, session_factory):
+    records = _sdk_records(name)
+    case = SDK_LOCAL[name]
+    split = case["partial_records"]
+    async with session_factory() as session:
+        bindings, jobs = IntegrationRepository(session), JobRepository(session)
+        job = await HistoryRegistration(bindings, jobs, ProjectRepository(session)).register(
+            binding_id="sdk-capture", project_id="proj-1", format_id=name, external_session_id="inert-producer"
+        )
+        await session.commit()
+        service = ObservationRecords(bindings, jobs, EventBus())
+        first = ObservationRecordBatch(source_key="sdk-local", start_index=0, records=records[:split])
+        receipt = await service.append("sdk-capture", first)
+        assert receipt.accepted_records == receipt.next_index == split
+        initial = await EventRepository(session).list_after(0, job_id=job.id)
+        assert (await service.append("sdk-capture", first)).replay
+        assert await EventRepository(session).list_after(0, job_id=job.id) == initial
+        second = ObservationRecordBatch(
+            source_key="sdk-local", start_index=split, prefix_sha256=receipt.prefix_sha256, records=records[split:]
+        )
+        receipt = await service.append("sdk-capture", second)
+        assert receipt.accepted_records == len(records) - split and receipt.next_index == len(records)
+        assert not receipt.session_closed
+        before = await EventRepository(session).list_after(0, job_id=job.id)
+    async with session_factory() as session:
+        bindings = IntegrationRepository(session)
+        service = ObservationRecords(bindings, JobRepository(session), EventBus())
+        assert (await service.append("sdk-capture", first)).replay
+        assert (await service.append("sdk-capture", second)).replay
+        durable = await EventRepository(session).list_after(0, job_id=job.id)
+        assert durable == before
+        receipts = [row.event for row in durable if row.event.kind == "integration.batch.accepted"]
+        assert [raw for event in receipts for raw in event.raw_event["records"]] == records
+        assert all(event.metadata.source_framework is None for event in receipts)
+        tools = [
+            row.event
+            for row in durable
+            if row.event.kind in {"tool.call.started", "tool.call.completed", "tool.call.failed"}
+        ]
+        assert [event.kind for event in tools] == case["paired_kinds"]
+        if name == "maf_transcript":
+            assert tools[0].payload["activity_id"] == "activity-invoke"
+            assert tools[0].payload["_codeplane_pairing"]["reason"] == "missing_identity"
+            assert "tool_call_id" not in tools[0].payload
+        else:
+            for event, index in zip(tools, case["completed_record_indices"], strict=True):
+                _, expected = case["expected"][index][0]
+                for key, value in expected.items():
+                    assert json.dumps(event.payload[key], sort_keys=True) == json.dumps(value, sort_keys=True)
+                assert "_codeplane_pairing" not in event.payload
+                assert event.payload["_codeplane_source"]["record_index"] == index
+        assert not any(row.event.kind.startswith(("llm.", "telemetry.usage")) for row in durable)
+        # A different physical input at an accepted position cannot be silently re-admitted.
+        changed = deepcopy(records[0])
+        changed["unexpected_rewrite"] = True
+        with pytest.raises(StateConflictError, match="prefix|position"):
+            await service.append("sdk-capture", first.model_copy(update={"records": [changed, *records[1:split]]}))
+        assert await EventRepository(session).list_after(0, job_id=job.id) == durable
 
 
 def test_aider_markdown_preparser_full_and_chunked_source():

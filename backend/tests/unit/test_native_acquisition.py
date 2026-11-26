@@ -6,6 +6,8 @@ import json
 import sqlite3
 from contextlib import asynccontextmanager
 from copy import deepcopy
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -19,6 +21,7 @@ from backend.persistence.integration_repo import IntegrationRepository
 from backend.persistence.job_repo import JobRepository
 from backend.persistence.project_repo import ProjectRepository
 from backend.services.events.event_bus import EventBus
+from backend.services.ingest import acquisition_sources
 from backend.services.ingest.acquisition import AcquisitionChannel
 from backend.services.ingest.acquisition_checkpoint import AcquisitionCheckpoint
 from backend.services.ingest.acquisition_sources import (
@@ -109,6 +112,25 @@ async def _reply_sse_chunks(writer, chunks):
         await asyncio.sleep(0)
     writer.write(b"0\r\n\r\n")
     await writer.drain()
+
+
+@pytest.mark.parametrize("change", ["none", "descriptor-ctime", "path-identity"])
+def test_snapshot_ctime_is_compared_within_the_same_metadata_api(tmp_path, monkeypatch, change):
+    path = tmp_path / "snapshot.json"
+    body = b'{"local":true}'
+    path.write_bytes(body)
+    metadata = dict(st_dev=1, st_ino=2, st_size=len(body), st_mtime_ns=3, st_ctime_ns=4)
+    after = {**metadata, "st_ctime_ns": 5 if change == "descriptor-ctime" else 4}
+    path_metadata = {**metadata, "st_ctime_ns": 1, "st_ino": 9 if change == "path-identity" else 2}
+    descriptor_stats = iter((SimpleNamespace(**metadata), SimpleNamespace(**after)))
+    observed = Mock(wraps=path)
+    observed.stat.return_value = SimpleNamespace(**path_metadata)
+    monkeypatch.setattr(acquisition_sources.os, "fstat", lambda _: next(descriptor_stats))
+    if change == "none":
+        assert acquisition_sources._read_file(observed) == body
+    else:
+        with pytest.raises(ValueError, match="snapshot changed"):
+            acquisition_sources._read_file(observed)
 
 
 async def test_file_snapshots_diff_stable_records_across_replacement_and_restart(session_factory, tmp_path):

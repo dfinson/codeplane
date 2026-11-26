@@ -316,7 +316,13 @@ jobs:
             "backend/tests/unit/test_native_jsonl_watch.py::test_fresh_tail_keeps_physical_decoded_emitted_and_storage_counts",
             "backend/tests/unit/test_native_jsonl_watch.py::test_incomplete_suffix_waits_for_newline_without_advancing",
             "backend/tests/unit/test_native_jsonl_watch.py::test_restart_rejects_rewritten_bytes_even_if_json_semantics_match",
-            "backend/tests/unit/test_native_jsonl_watch.py::test_resume_rejects_late_accepted_rewrite_and_discards_reconstruction"
+            "backend/tests/unit/test_native_jsonl_watch.py::test_resume_rejects_late_accepted_rewrite_and_discards_reconstruction",
+            "backend/tests/unit/test_native_acquisition.py::test_snapshot_ctime_is_compared_within_the_same_metadata_api",
+            "backend/tests/unit/test_native_format_conformance.py::test_actual_antigravity_history_acquisition_keeps_original_prefix_and_rewrites_fail",
+            "backend/tests/unit/test_native_format_conformance.py::test_actual_cline_incremental_registered_history_preserves_ui_evidence_and_native_ids",
+            "backend/tests/unit/test_native_format_conformance.py::test_actual_local_sdk_bytes_payload_identity_and_absent_usage",
+            "backend/tests/unit/test_native_format_conformance.py::test_actual_local_sdk_partial_pairs_remain_explicit",
+            "backend/tests/unit/test_native_format_conformance.py::test_actual_local_sdk_registered_history_retains_bytes_semantics_and_exact_retries"
           )
           uv run --no-sync --with "pytest>=8,<9" --with "pytest-asyncio>=0.24,<1" --with "pytest-timeout>=2.4,<3" python -m pytest -v @targets --timeout=60 --junitxml=native-source-windows-results.xml --tb=short
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -329,6 +335,8 @@ jobs:
           cases = root.findall(".//testcase")
           ownership = "backend.tests.unit.test_native_source_ownership"
           watcher = "backend.tests.unit.test_native_jsonl_watch"
+          acquisition = "backend.tests.unit.test_native_acquisition"
+          conformance = "backend.tests.unit.test_native_format_conformance"
           expected = {
               (ownership, "test_child_owner_blocks_until_release[graceful]"),
               (ownership, "test_child_owner_blocks_until_release[terminated]"),
@@ -341,12 +349,24 @@ jobs:
               expected.add((watcher, f"test_fresh_tail_keeps_physical_decoded_emitted_and_storage_counts[{framework}]"))
               for boundary in ("first_replayed_event", "last_replayed_event"):
                   expected.add((watcher, f"test_resume_rejects_late_accepted_rewrite_and_discards_reconstruction[{boundary}-{framework}]"))
+          for change in ("none", "descriptor-ctime", "path-identity"):
+              expected.add((acquisition, f"test_snapshot_ctime_is_compared_within_the_same_metadata_api[{change}]"))
+          expected.add((conformance, "test_actual_antigravity_history_acquisition_keeps_original_prefix_and_rewrites_fail"))
+          for defect in ("rewrite", "version-drift"):
+              expected.add((conformance, f"test_actual_cline_incremental_registered_history_preserves_ui_evidence_and_native_ids[{defect}]"))
+          for name in ("langchain", "semantic_kernel", "maf_transcript"):
+              for test in (
+                  "test_actual_local_sdk_bytes_payload_identity_and_absent_usage",
+                  "test_actual_local_sdk_partial_pairs_remain_explicit",
+                  "test_actual_local_sdk_registered_history_retains_bytes_semantics_and_exact_retries",
+              ):
+                  expected.add((conformance, f"{test}[{name}]"))
           actual = {(case.get("classname"), case.get("name")) for case in cases}
-          assert len(cases) == len(expected) == 13, (len(cases), len(expected))
+          assert len(cases) == len(expected) == 28, (len(cases), len(expected))
           assert actual == expected, {"missing": expected - actual, "unexpected": actual - expected}
           assert all(case.find(tag) is None for case in cases for tag in ("skipped", "failure", "error"))
           assert all(int(suite.get(tag, "0")) == 0 for suite in root.findall(".//testsuite") for tag in ("skipped", "failures", "errors"))
-          print("All 13 exact native source cases passed without skips, failures, or errors:")
+          print("All 28 exact native source cases passed without skips, failures, or errors:")
           print("\n".join(f"{module}::{name}" for module, name in sorted(actual)))
           '@ | uv run --no-project python -
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

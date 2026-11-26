@@ -120,6 +120,8 @@ runtime-evaluated-decorators = ["dishka.integrations.fastapi.FromDishka"]
 "backend/models/api_schemas.py" = ["F405"]
 # Template service contains long LLM prompt strings that cannot be wrapped.
 "backend/services/sidecar/template_service.py" = ["E501"]
+# Historical producer capture source is retained byte-for-byte for its provenance hash.
+"backend/tests/fixtures/native_formats/sdk_local/capture.py" = ["I001"]
 
 [tool.mypy]
 python_version = "3.12"

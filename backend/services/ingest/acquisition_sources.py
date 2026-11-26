@@ -98,12 +98,13 @@ def _read_file(path: Path) -> bytes:
     with path.open("rb") as stream:
         before = os.fstat(stream.fileno())
         body = stream.read(MAX_BYTES + 1)
+        current = path.stat()
         after = os.fstat(stream.fileno())
-    current = path.stat()
     fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
-    if any(
-        getattr(before, field) != getattr(after, field) or getattr(after, field) != getattr(current, field)
-        for field in fields
+    # Windows stat and fstat can expose different ctime meanings. Compare mutation
+    # on the same descriptor, and path identity while that descriptor is still open.
+    if any(getattr(before, field) != getattr(after, field) for field in fields) or any(
+        getattr(after, field) != getattr(current, field) for field in fields[:-1]
     ):
         raise ValueError("Complete-file snapshot changed during acquisition")
     if len(body) > MAX_BYTES:

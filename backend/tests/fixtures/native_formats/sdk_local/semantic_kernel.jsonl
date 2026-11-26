@@ -1,0 +1,8 @@
+{"type":"native_function.started","timestamp":"2026-11-18T12:05:03.765917+00:00","invocation_id":"d448ad43-e9d6-4f65-98fd-c1fd4e47e061","function_name":"local","plugin_name":"test","arguments":{"value":"alpha"}}
+{"type":"native_function.completed","timestamp":"2026-11-18T12:05:03.766075+00:00","invocation_id":"d448ad43-e9d6-4f65-98fd-c1fd4e47e061","function_name":"local","plugin_name":"test","result":"result:alpha"}
+{"type":"native_function.started","timestamp":"2026-11-18T12:05:03.766150+00:00","invocation_id":"4ce827ef-44bf-4f5f-b0fd-03083e2e8726","function_name":"local","plugin_name":"test","arguments":{"value":"fail"}}
+{"type":"native_function.failed","timestamp":"2026-11-18T12:05:03.766170+00:00","invocation_id":"4ce827ef-44bf-4f5f-b0fd-03083e2e8726","function_name":"local","plugin_name":"test","error":"local rejection"}
+{"type":"auto_function.started","timestamp":"2026-11-18T12:05:03.767380+00:00","invocation_id":"1d71d48a-bb32-49c2-96c0-075d4649bbe4","function_name":"local","plugin_name":"test","arguments":{"value":"auto"},"function_count":1,"request_sequence_index":0,"function_sequence_index":0}
+{"type":"native_function.started","timestamp":"2026-11-18T12:05:03.767447+00:00","invocation_id":"5e65064b-8996-43ae-867f-4898766301e0","function_name":"local","plugin_name":"test","arguments":{"value":"auto"}}
+{"type":"native_function.completed","timestamp":"2026-11-18T12:05:03.767477+00:00","invocation_id":"5e65064b-8996-43ae-867f-4898766301e0","function_name":"local","plugin_name":"test","result":"result:auto"}
+{"type":"auto_function.completed","timestamp":"2026-11-18T12:05:03.767505+00:00","invocation_id":"1d71d48a-bb32-49c2-96c0-075d4649bbe4","function_name":"local","plugin_name":"test","result":"result:auto","terminate":false}
