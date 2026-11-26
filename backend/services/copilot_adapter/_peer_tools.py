@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, Field
 
 from backend.models.api_schemas import PeerMessageRequest  # noqa: TC001 - SDK resolves annotations at runtime.
+from backend.services.adapters.capability_guard import PEER_DIRECTORY_TOOL, PEER_MESSAGE_TOOL
 
 if TYPE_CHECKING:
     from copilot.types import Tool
@@ -29,7 +30,7 @@ def build_peer_tools(config: SessionConfig) -> list[Tool]:
     from copilot import define_tool
 
     @define_tool(
-        "codeplane_list_peer_sessions",
+        PEER_DIRECTORY_TOOL,
         description=(
             "Discover jobs in this project. Supply target_job_id to get that job's agent cards, "
             "including each recipe agent's purpose, current status, attempt ID and execution token. "
@@ -40,7 +41,7 @@ def build_peer_tools(config: SessionConfig) -> list[Tool]:
         return await directory(params.offset, params.target_job_id, params.cursor)
 
     @define_tool(
-        "codeplane_send_peer_message",
+        PEER_MESSAGE_TOOL,
         description=(
             "Send an attributed note to a running Copilot peer in the same project. "
             "Your sender identity is bound by the server, not supplied by you. "

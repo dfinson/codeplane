@@ -4,6 +4,7 @@ from backend.services.adapters.capability_guard import (
     enforce_command_capabilities,
     enforce_invocation_capabilities,
     enforce_tool_capabilities,
+    excluded_tools_for_capabilities,
     invocation_permission_request,
 )
 from backend.services.adapters.contracts import CapabilityDeniedError
@@ -113,3 +114,25 @@ async def test_unknown_tools_and_external_reads_cannot_bypass_grant(tmp_path) ->
         tool_name="Read",
         paths=("file.txt",),
     )
+
+
+async def test_peer_tools_use_narrow_capabilities_only_as_custom_tools(tmp_path) -> None:
+    read_delegate = frozenset({"read", "delegate"})
+    for name in ("codeplane_list_peer_sessions", "codeplane_send_peer_message"):
+        await enforce_invocation_capabilities(read_delegate, workspace=str(tmp_path), tool_name=name, arguments={})
+        request = invocation_permission_request(str(tmp_path), name, {})
+        await enforce_tool_capabilities(read_delegate, workspace=str(tmp_path), kind=request.kind, tool_name=name)
+    await enforce_invocation_capabilities(
+        frozenset({"read"}), workspace=str(tmp_path), tool_name="codeplane_list_peer_sessions", arguments={}
+    )
+    for capabilities, name, kind in [
+        (frozenset({"read"}), "codeplane_send_peer_message", "custom-tool"),
+        (frozenset({"delegate"}), "codeplane_list_peer_sessions", "custom-tool"),
+        (read_delegate, "codeplane_send_peer_message", "mcp"),
+        (read_delegate, "codeplane_other_tool", "custom-tool"),
+    ]:
+        with pytest.raises(CapabilityDeniedError):
+            await enforce_tool_capabilities(capabilities, workspace=str(tmp_path), kind=kind, tool_name=name)
+    excluded = excluded_tools_for_capabilities(frozenset({"read"}), [])
+    assert "codeplane_send_peer_message" in excluded
+    assert "codeplane_list_peer_sessions" not in excluded

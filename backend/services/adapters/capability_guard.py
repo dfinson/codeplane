@@ -54,6 +54,12 @@ _WRITE_TOOLS = frozenset(
 _DELEGATE_TOOLS = frozenset({"task", "agent", "runsubagent", "search_subagent"})
 _NETWORK_TOOLS = frozenset({"webfetch", "websearch", "web_fetch", "web_search", "fetch_webpage"})
 _SHELL_TOOLS = frozenset({"bash", "powershell", "shell", "terminal", "run_in_terminal"})
+# Server-registered peer tools. Their sender identity and recipients are bound by
+# CodePlane, so they map to narrow capabilities instead of the full custom-tool grant.
+PEER_DIRECTORY_TOOL = "codeplane_list_peer_sessions"
+PEER_MESSAGE_TOOL = "codeplane_send_peer_message"
+_PEER_READ_TOOLS = frozenset({PEER_DIRECTORY_TOOL})
+_PEER_DELEGATE_TOOLS = frozenset({PEER_MESSAGE_TOOL})
 _PURE_BASH_BUILTINS = frozenset({"pwd", "echo", "printf", "true", "false", ":"})
 
 
@@ -212,7 +218,11 @@ async def enforce_tool_capabilities(
             dialect=dialect,
         )
         return
-    if kind in {"mcp", "custom-tool", "unknown"}:
+    if kind in {"custom-tool", ""} and name in _PEER_READ_TOOLS:
+        grant.require(frozenset({Capability.read}))
+    elif kind in {"custom-tool", ""} and name in _PEER_DELEGATE_TOOLS:
+        grant.require(frozenset({Capability.delegate}))
+    elif kind in {"mcp", "custom-tool", "unknown"}:
         grant.require(frozenset(Capability))
     elif name in _NETWORK_TOOLS or kind == "url":
         grant.require(frozenset({Capability.external_access}))
@@ -235,9 +245,9 @@ def excluded_tools_for_capabilities(capabilities: frozenset[str] | None, existin
     grant = _grant(capabilities)
     excluded = set(existing)
     groups = (
-        (Capability.read, _READ_TOOLS),
+        (Capability.read, _READ_TOOLS | _PEER_READ_TOOLS),
         (Capability.write, _WRITE_TOOLS),
-        (Capability.delegate, _DELEGATE_TOOLS),
+        (Capability.delegate, _DELEGATE_TOOLS | _PEER_DELEGATE_TOOLS),
         (Capability.external_access, _NETWORK_TOOLS),
     )
     for capability, tools in groups:

@@ -1516,7 +1516,10 @@ execution; tool arguments cannot choose a sender identity or claim operator
 authority. The UI also supports operator-attributed relay notes. Both paths are
 restricted to the same project and currently running managed Copilot recipients.
 Paused, gated, canceled, or finished sessions are not resumed by delivery.
-Verification and self-review sessions do not inherit peer tools.
+Verification and self-review sessions do not inherit peer tools. Under a
+restricted recipe capability grant, listing peers requires `read` and sending a
+note requires `delegate`. These names are classified only as server-registered
+custom tools; MCP or other unclassified tools still require the full grant.
 
 For recipe jobs, the directory exposes a paginated menu of instantiated agent
 cards with purpose, provider/model, current status, attempt/session identity, and
