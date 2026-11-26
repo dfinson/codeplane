@@ -19,6 +19,7 @@ const PROVIDERS: Array<{ value: CredentialProvider; label: string }> = [
   { value: "github", label: "GitHub Projects" },
   { value: "jira", label: "Jira" },
   { value: "azure_devops", label: "Azure DevOps" },
+  { value: "copilot", label: "Copilot inference" },
 ];
 
 /**
@@ -64,7 +65,7 @@ export function IntegrationsSettings() {
   }, [load]);
 
   const handleCreate = async () => {
-    if (!label.trim() || !baseUrl.trim() || !pat.trim() || (provider === "jira" && !email.trim())) {
+    if (!label.trim() || (provider !== "copilot" && !baseUrl.trim()) || !pat.trim() || (provider === "jira" && !email.trim())) {
       toast.error("Provider, label, base URL, token, and Jira account email (for Jira) are required.");
       return;
     }
@@ -73,7 +74,7 @@ export function IntegrationsSettings() {
       await createCredential({
         provider,
         label: label.trim(),
-        baseUrl: baseUrl.trim(),
+        baseUrl: provider === "copilot" ? "https://github.com" : baseUrl.trim(),
         pat: pat.trim(),
         email: provider === "jira" ? email.trim() : null,
       });
@@ -140,8 +141,9 @@ export function IntegrationsSettings() {
       <div>
         <p className="text-sm font-semibold">Integrations</p>
         <p className="text-xs text-muted-foreground mt-0.5">
-          Register a provider account once here — attach it to any Project later via a
-          TrackerLink. The PAT is encrypted at rest and never shown again after saving.
+          Register tracker credentials or a separate Copilot inference credential.
+          Tokens are encrypted at rest and never shown again after saving.
+          Copilot selection does not change Git or gh authentication.
         </p>
       </div>
 
@@ -224,6 +226,12 @@ export function IntegrationsSettings() {
           <p className="text-xs text-muted-foreground">{guidance[provider]}</p>
         )}
 
+        {provider === "copilot" && (
+          <p className="text-xs text-muted-foreground">
+            This label is not a verified billing identity. Choose this credential on New Job.
+            It is retained for that job, its helpers, resumes, reruns, and follow-ups.
+          </p>
+        )}
         <div className="space-y-1.5">
           <Label htmlFor="credential-label">Label</Label>
           <Input
@@ -233,7 +241,7 @@ export function IntegrationsSettings() {
             placeholder="e.g. Personal GitHub"
           />
         </div>
-        <div className="space-y-1.5">
+        {provider !== "copilot" && <div className="space-y-1.5">
           <Label htmlFor="credential-base-url">Base URL</Label>
           <Input
             id="credential-base-url"
@@ -241,7 +249,7 @@ export function IntegrationsSettings() {
             onChange={(e) => setBaseUrl(e.target.value)}
             placeholder="https://api.github.com"
           />
-        </div>
+        </div>}
         {provider === "jira" && (
           <div className="space-y-1.5">
             <Label htmlFor="credential-email">Jira account email</Label>
@@ -277,7 +285,7 @@ export function IntegrationsSettings() {
           if (pendingDeleteId) await handleDelete(pendingDeleteId);
         }}
         title="Delete Credential"
-        description="Deleting a Credential still referenced by a TrackerLink will be rejected. Are you sure you want to delete this Credential?"
+        description="Tracker-linked credentials cannot be deleted. Deleting a Copilot credential makes future invocations for bound jobs fail, without switching to another account. Delete this credential?"
         confirmLabel="Delete"
         variant="destructive"
       />

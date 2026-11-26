@@ -2,8 +2,8 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ChevronDown, ChevronRight, PlaneTakeoff } from "lucide-react";
 import { toast } from "sonner";
-import { createJob, fetchProjects, fetchRepoDetail, suggestNames, fetchModelComparison, warmUtilitySession, releaseUtilitySession, fetchPolicySettings } from "../api/client";
-import type { ProjectResponse, SDKInfo } from "../api/types";
+import { createJob, fetchProjects, fetchRepoDetail, suggestNames, fetchModelComparison, warmUtilitySession, releaseUtilitySession, fetchPolicySettings, fetchCredentials, fetchModels } from "../api/client";
+import type { CredentialResponse, ProjectResponse, SDKInfo } from "../api/types";
 import { useStore } from "../store";
 import { PromptWithVoice } from "./VoiceButton";
 import { SidecarPicker } from "./SidecarPicker";
@@ -58,6 +58,11 @@ export function JobCreationScreen() {
   const [mode, setMode] = useState<"standard" | "plan">("standard");
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [sdk, setSdk] = useState<string | null>(null);
+  const [copilotCredentialId, setCopilotCredentialId] = useState<string | null>(null);
+  const [copilotCredentials, setCopilotCredentials] = useState<CredentialResponse[]>([]);
+  const [accountModels, setAccountModels] = useState<{ value: string; label: string }[]>([]);
+  const [accountModelsLoading, setAccountModelsLoading] = useState(false);
+  const [accountModelsError, setAccountModelsError] = useState(false);
   const [branchSuggesting, setBranchSuggesting] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [voiceState, setVoiceState] = useState<"idle" | "recording" | "transcribing">("idle");
@@ -91,21 +96,51 @@ export function JobCreationScreen() {
 
   // Resolve the active SDK — default to what the store says once it's loaded
   const activeSdk = sdk ?? defaultSdk ?? "copilot";
-  const models = modelsBySdk[activeSdk] ?? [];
+  const effectiveCredentialId = activeSdk === "copilot" ? copilotCredentialId : null;
+  const models = effectiveCredentialId ? accountModels : modelsBySdk[activeSdk] ?? [];
   // Show loading only while SDKs are fetching OR while this SDK's model list is actively fetching.
   // Avoids "stuck loading" if the SDK fetch fails (defaultSdk stays null) or if models were never
   // requested for this SDK (modelsLoadingBySdk entry is undefined → falsy → not loading).
-  const modelsLoading = sdksLoading || modelsLoadingBySdk[activeSdk] === true;
+  const modelsLoading = effectiveCredentialId ? accountModelsLoading : sdksLoading || modelsLoadingBySdk[activeSdk] === true;
+
+  useEffect(() => {
+    fetchCredentials().then((result) => {
+      setCopilotCredentials(result.credentials.filter((credential) => credential.provider === "copilot"));
+    }).catch(() => toast.error("Could not load Copilot credentials"));
+  }, []);
+
+  useEffect(() => {
+    suggestedNamesRef.current = null;
+    setModel(null);
+    setAccountModels([]);
+    setAccountModelsError(false);
+    if (!effectiveCredentialId) return;
+    let cancelled = false;
+    setAccountModelsLoading(true);
+    fetchModels("copilot", effectiveCredentialId).then((items) => {
+      if (cancelled) return;
+      setAccountModels(items.filter((item) => item.id).map((item) => ({
+        value: String(item.id), label: String(item.name ?? item.id),
+      })));
+    }).catch(() => {
+      if (!cancelled) {
+        setAccountModelsError(true);
+        toast.error("Model discovery failed for the selected Copilot credential. No ambient fallback.");
+      }
+    }).finally(() => { if (!cancelled) setAccountModelsLoading(false); });
+    return () => { cancelled = true; };
+  }, [effectiveCredentialId]);
 
   // Sync the selected model whenever the active SDK's model list becomes available
   useEffect(() => {
+    if (effectiveCredentialId) return;
     const sdkModels = modelsBySdk[activeSdk];
     if (sdkModels === undefined) return;
     setModel((prev) => {
       if (prev && sdkModels.some((m) => m.value === prev)) return prev;
       return defaultModelBySdk[activeSdk] ?? null;
     });
-  }, [activeSdk, modelsBySdk, defaultModelBySdk]);
+  }, [activeSdk, modelsBySdk, defaultModelBySdk, effectiveCredentialId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -169,7 +204,7 @@ export function JobCreationScreen() {
     let cancelled = false;
     branchDebounceRef.current = setTimeout(() => {
       setBranchSuggesting(true);
-      suggestNames(prompt)
+      suggestNames(prompt, effectiveCredentialId ?? undefined)
         .then((names) => {
           if (!cancelled) {
             setBranch(names.branchName);
@@ -186,7 +221,7 @@ export function JobCreationScreen() {
       cancelled = true;
       if (branchDebounceRef.current) clearTimeout(branchDebounceRef.current);
     };
-  }, [prompt, branchEdited]);
+  }, [prompt, branchEdited, effectiveCredentialId]);
 
   useEffect(() => {
     if (!repo || baseRefEdited) return;
@@ -245,7 +280,7 @@ export function JobCreationScreen() {
   }, []);
 
   const handleSubmit = useCallback(async () => {
-    if (!repo || !prompt.trim() || voiceState !== "idle") return;
+    if (!repo || !prompt.trim() || voiceState !== "idle" || (effectiveCredentialId && (accountModelsLoading || accountModelsError))) return;
     setSubmitting(true);
     try {
       // Ensure LLM naming is available before submitting.
@@ -253,7 +288,7 @@ export function JobCreationScreen() {
       let cached = suggestedNamesRef.current;
       if (!cached) {
         try {
-          const names = await suggestNames(prompt);
+          const names = await suggestNames(prompt, effectiveCredentialId ?? undefined);
           cached = { title: names.title, description: names.description, worktreeName: names.worktreeName };
           suggestedNamesRef.current = cached;
           if (!branchEdited) setBranch(names.branchName);
@@ -273,6 +308,7 @@ export function JobCreationScreen() {
         preset: preset,
         model: model || undefined,
         sdk: activeSdk !== defaultSdk ? activeSdk : undefined,
+        copilotCredentialId: effectiveCredentialId ?? undefined,
         sessionToken: sessionTokenRef.current ?? undefined,
         projectId: selectedProjectId ?? undefined,
         mode: mode !== "standard" ? mode : undefined,
@@ -285,12 +321,13 @@ export function JobCreationScreen() {
     } finally {
       setSubmitting(false);
     }
-  }, [repo, prompt, voiceState, baseRef, branch, branchEdited, model, navigate, preset, mode, activeSdk, defaultSdk, selectedProjectId]);
+  }, [repo, prompt, voiceState, baseRef, branch, branchEdited, model, navigate, preset, mode, activeSdk, defaultSdk, selectedProjectId, effectiveCredentialId, accountModelsLoading, accountModelsError]);
 
   const enabledSdks = sdks.filter((s) => s.enabled);
   const showSdkSelector = enabledSdks.length > 1;
   const currentSdkInfo = sdks.find((s) => s.id === activeSdk);
-  const sdkNotReady = currentSdkInfo && currentSdkInfo.status !== "ready";
+  const sdkNotReady = currentSdkInfo && currentSdkInfo.status !== "ready"
+    && !(effectiveCredentialId && currentSdkInfo.status === "not_configured");
 
   return (
     <div className="max-w-3xl mx-auto">
@@ -419,6 +456,27 @@ export function JobCreationScreen() {
               onChange={handleSdkChange}
             />
           )}
+          {activeSdk === "copilot" && (
+            <div className="space-y-1.5">
+              <Label htmlFor="copilot-inference-account">Copilot inference account</Label>
+              <select
+                id="copilot-inference-account"
+                value={copilotCredentialId ?? ""}
+                onChange={(event) => setCopilotCredentialId(event.target.value || null)}
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+              >
+                <option value="">Ambient Copilot login (legacy behavior)</option>
+                {copilotCredentials.map((credential) => (
+                  <option key={credential.id} value={credential.id}>{credential.label}</option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground">
+                Register encrypted credentials in Settings &gt; Integrations. Labels are not verified billing identities.
+                Selection is fixed for this job and its helpers. Git and gh authentication stay unchanged.
+              </p>
+              {accountModelsError && <p role="alert" className="text-xs text-destructive">Selected account unavailable. No ambient fallback.</p>}
+            </div>
+          )}
 
           {sdkNotReady && (
             <p className="text-xs text-amber-600 dark:text-amber-400 -mt-1">
@@ -497,7 +555,7 @@ export function JobCreationScreen() {
               Cancel
             </Button>
             <Button
-              disabled={!repo || !prompt.trim() || voiceState !== "idle" || !!sdkNotReady}
+              disabled={!repo || !prompt.trim() || voiceState !== "idle" || !!sdkNotReady || (!!effectiveCredentialId && (accountModelsLoading || accountModelsError))}
               loading={submitting}
               onClick={handleSubmit}
             >

@@ -274,10 +274,10 @@ export async function releaseUtilitySession(token: string): Promise<void> {
   });
 }
 
-export function suggestNames(prompt: string): Promise<import("./types").SuggestNamesResponse> {
+export function suggestNames(prompt: string, copilotCredentialId?: string): Promise<import("./types").SuggestNamesResponse> {
   return request("/jobs/suggest-names", {
     method: "POST",
-    body: JSON.stringify({ prompt }),
+    body: JSON.stringify({ prompt, copilotCredentialId }),
   });
 }
 
@@ -299,8 +299,11 @@ export function rerunJob(jobId: string): Promise<CreateJobResponse> {
   });
 }
 
-export function fetchModels(sdk?: string): Promise<{ id?: string; name?: string; [key: string]: unknown }[]> {
-  const qs = sdk ? `?sdk=${encodeURIComponent(sdk)}` : "";
+export function fetchModels(sdk?: string, copilotCredentialId?: string): Promise<{ id?: string; name?: string; [key: string]: unknown }[]> {
+  const params = new URLSearchParams();
+  if (sdk) params.set("sdk", sdk);
+  if (copilotCredentialId) params.set("copilotCredentialId", copilotCredentialId);
+  const qs = params.size ? `?${params}` : "";
   return request<{ items: { id?: string; name?: string; [key: string]: unknown }[] }>(`/models${qs}`).then((r) => r.items);
 }
 
@@ -717,25 +720,9 @@ export function updateUsdCeilings(
 
 // --- Credentials (Story 3.1, global Settings > Integrations) ---
 
-export type CredentialProvider = "github" | "jira" | "azure_devops";
-
-export interface Credential {
-  id: string;
-  provider: CredentialProvider;
-  label: string;
-  baseUrl: string;
-  email: string | null;
-  requiresEmailUpdate: boolean;
-  createdAt: string;
-}
-
-export interface CreateCredentialRequest {
-  provider: CredentialProvider;
-  label: string;
-  baseUrl: string;
-  pat: string;
-  email?: string | null;
-}
+export type CredentialProvider = "github" | "jira" | "azure_devops" | "copilot";
+export type Credential = import("./types").CredentialResponse;
+export type CreateCredentialRequest = import("./types").CreateCredentialRequest;
 
 export function fetchCredentials(): Promise<{ credentials: Credential[] }> {
   return request("/settings/credentials");

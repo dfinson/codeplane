@@ -553,7 +553,9 @@ async def _wire_core_services(
     )
 
     # --- Sidecar session manager (per-job dedicated utility sessions) ---
-    utility_adapter = adapter_registry.get_adapter(config.runtime.default_sdk)
+    from backend.services.adapters.inference_utility_adapter import InferenceUtilityAdapter
+
+    utility_adapter = InferenceUtilityAdapter(adapter_registry, config.runtime.default_sdk, session_factory)
     sidecar_sessions = SidecarSessionManager(
         adapter=utility_adapter,
         model=config.runtime.utility_model,

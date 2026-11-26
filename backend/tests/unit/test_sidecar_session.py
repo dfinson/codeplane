@@ -64,6 +64,26 @@ class _FakeSidecarConfig:
 
 class TestSidecarSession:
     @pytest.mark.asyncio
+    async def test_pool_does_not_leak_job_identity(self) -> None:
+        from backend.services.inference_account import _binding
+
+        adapter = _mock_adapter()
+        observed = []
+
+        async def complete(*args, **kwargs):
+            observed.append(_binding.get().job_id)
+            return _CompletionResult(text="ok", input_tokens=0, output_tokens=0, cost_usd=0)
+
+        adapter.complete.side_effect = complete
+        manager = _make_manager(adapter, pool_size=1)
+        await manager.start()
+        await manager.complete("first", job_id="job-a")
+        await manager.complete("second", job_id="job-b")
+        await manager.complete("standalone")
+        assert observed == ["job-a", "job-b", None]
+        await manager.shutdown()
+
+    @pytest.mark.asyncio
     async def test_first_call_prepends_system_prompt(self) -> None:
         adapter = _mock_adapter()
         session = SidecarSession(adapter)

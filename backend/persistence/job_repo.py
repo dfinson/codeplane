@@ -72,6 +72,8 @@ class JobRepository(BaseRepository):
             preset=Preset(row.preset) if row.preset else Preset.supervised,
             session_count=row.session_count or 1,
             sdk_session_id=row.sdk_session_id,
+            copilot_credential_id=row.copilot_credential_id,
+            copilot_credential_label=row.copilot_credential_label,
             model=row.model,
             resolution=Resolution(row.resolution) if row.resolution else None,
             archived_at=row.archived_at,
@@ -120,6 +122,8 @@ class JobRepository(BaseRepository):
             preset=job.preset,
             session_count=job.session_count,
             sdk_session_id=job.sdk_session_id,
+            copilot_credential_id=job.copilot_credential_id,
+            copilot_credential_label=job.copilot_credential_label,
             model=job.model,
             resolution=job.resolution,
             archived_at=job.archived_at,
@@ -263,6 +267,24 @@ class JobRepository(BaseRepository):
         stmt = stmt.limit(limit)
         result = await self._session.execute(stmt)
         return [self._to_domain(row) for row in result.scalars().all()]
+
+    async def session_relatives(
+        self, job: Job, *, children: bool, offset: int = 0, limit: int = 51
+    ) -> builtins.list[Job]:
+        stmt = select(JobRow).where(JobRow.project_id == job.project_id)
+        if children:
+            stmt = stmt.where(JobRow.parent_job_id == job.id)
+        else:
+            stmt = stmt.where(
+                JobRow.id != job.id,
+                JobRow.source == "managed",
+                JobRow.sdk == "copilot",
+                JobRow.state == JobState.running,
+            )
+        result = await self._session.execute(
+            stmt.order_by(JobRow.created_at, JobRow.id).offset(offset).limit(limit)
+        )
+        return [self._to_domain(row) for row in result.scalars()]
 
     async def list_all(
         self,

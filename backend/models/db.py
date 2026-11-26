@@ -41,6 +41,8 @@ class JobRow(Base):
     preset: Mapped[str] = mapped_column(String, nullable=False, server_default="supervised")
     session_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     sdk_session_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    copilot_credential_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    copilot_credential_label: Mapped[str | None] = mapped_column(String, nullable=True)
     model: Mapped[str | None] = mapped_column(String, nullable=True)
     failure_reason: Mapped[str | None] = mapped_column(String, nullable=True)
     sdk: Mapped[str] = mapped_column(String, nullable=False, default="copilot")
@@ -70,6 +72,22 @@ class JobRow(Base):
         Integer, nullable=False, default=0, server_default="0"
     )
     artifact_collection_updated_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
+
+
+class PeerMessageRow(Base):
+    __tablename__ = "peer_messages"
+
+    message_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    sender_job_id: Mapped[str] = mapped_column(String, ForeignKey("jobs.id", ondelete="CASCADE"), index=True)
+    recipient_job_id: Mapped[str] = mapped_column(String, ForeignKey("jobs.id", ondelete="CASCADE"), index=True)
+    sender_session_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    recipient_session_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    origin: Mapped[str] = mapped_column(String, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    reply_to: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    detail: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
 
 
 class ProjectRow(Base):

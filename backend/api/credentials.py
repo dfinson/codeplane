@@ -23,11 +23,17 @@ from backend.persistence.credential_repo import CredentialReferencedError, Crede
 router = APIRouter(prefix="/settings/credentials", tags=["credentials"], route_class=DishkaRoute)
 log = structlog.get_logger()
 
-_PROVIDER_PATTERN = r"^(github|jira|azure_devops)$"
+_PROVIDER_PATTERN = r"^(github|jira|azure_devops|copilot)$"
 
 # NFR9: per-provider PAT scope guidance, copy-paste only — never validated/enforced
 # against TrackerLinks, since a Credential is deliberately global and reusable.
 _PROVIDER_GUIDANCE: dict[str, str] = {
+    "copilot": (
+        "Use a GitHub token authorized for Copilot inference. Stored encrypted; never returned. "
+        "The label is not a verified billing identity. Selecting this credential applies to "
+        "managed Copilot jobs and their helpers only, not Git, gh, or tracker authentication. "
+        "A missing, revoked, or unauthorized selected credential fails without ambient fallback."
+    ),
     "github": (
         "Use a fine-grained personal access token. Scope it to the repos you need: "
         "'Issues: Read & write' for tracker writes; add 'Contents: Read & write' + "

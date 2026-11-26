@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 
     from backend.config import CPLConfig
     from backend.models.events import EventKind, SessionEvent
+    from backend.persistence.credential_repo import CredentialRepository
     from backend.persistence.event_repo import EventRepository
     from backend.persistence.job_repo import JobRepository
     from backend.persistence.project_repo import ProjectRepository
@@ -66,6 +67,7 @@ class JobService:
         event_repo: EventRepository | None = None,
         event_bus: EventBus | None = None,
         project_repo: ProjectRepository | None = None,
+        credential_repo: CredentialRepository | None = None,
     ) -> None:
         self._job_repo = job_repo
         self._git = git_service
@@ -74,6 +76,7 @@ class JobService:
         self._event_repo = event_repo
         self._event_bus = event_bus
         self._project_repo = project_repo
+        self._credential_repo = credential_repo
 
     @classmethod
     def from_session(
@@ -86,6 +89,7 @@ class JobService:
         event_bus: EventBus | None = None,
     ) -> JobService:
         """Construct from a DB session."""
+        from backend.persistence.credential_repo import CredentialRepository
         from backend.persistence.event_repo import EventRepository
         from backend.persistence.job_repo import JobRepository
         from backend.persistence.project_repo import ProjectRepository
@@ -105,6 +109,7 @@ class JobService:
             event_repo=event_repo,
             event_bus=event_bus,
             project_repo=project_repo,
+            credential_repo=CredentialRepository(session),
         )
 
     async def validate_repo_async(self, repo: str) -> str:
@@ -270,6 +275,7 @@ class JobService:
                 existing_branches=existing_branches,
                 existing_worktrees=existing_worktrees,
                 parent_job_context=spec.parent_job_context,
+                copilot_credential_id=job.copilot_credential_id,
             )
         except NamingError as exc:
             log.warning("naming_enrichment_failed", job_id=job_id, error=str(exc))
@@ -321,6 +327,15 @@ class JobService:
             raise ServiceInitError("GitService required for job creation")
 
         resolved_sdk = spec.sdk or self._config.runtime.default_sdk
+        credential_label = None
+        if spec.copilot_credential_id is not None:
+            from backend.services.inference_account import InferenceAccountError, validate_copilot_credential
+
+            if self._credential_repo is None:
+                raise InferenceAccountError("Credential storage is unavailable")
+            credential_label = await validate_copilot_credential(
+                self._credential_repo, spec.copilot_credential_id, resolved_sdk
+            )
 
         # Validate SDK-model compatibility upfront
         validate_sdk_model(resolved_sdk, spec.model)
@@ -345,6 +360,9 @@ class JobService:
                 prompt=spec.prompt,
                 project_id=project_id,
                 state=JobState.failed,
+                sdk=resolved_sdk,
+                copilot_credential_id=spec.copilot_credential_id,
+                copilot_credential_label=credential_label,
                 base_ref=base_ref,
                 branch=None,
                 worktree_path=None,
@@ -407,6 +425,8 @@ class JobService:
             preset=spec.preset,
             model=spec.model,
             sdk=resolved_sdk,
+            copilot_credential_id=spec.copilot_credential_id,
+            copilot_credential_label=credential_label,
             verify=spec.verify,
             self_review=spec.self_review,
             max_turns=spec.max_turns,
@@ -587,6 +607,7 @@ class JobService:
                 preset=original.preset,
                 model=original.model,
                 sdk=original.sdk,
+                copilot_credential_id=original.copilot_credential_id,
             )
         )
 

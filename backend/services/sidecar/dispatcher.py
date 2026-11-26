@@ -997,6 +997,7 @@ class SidecarDispatcher:
         if defn.lifetime == "ephemeral":
             # Ephemeral: create a one-shot session, call, discard
             session = self._session_manager.make_ephemeral(
+                job_id=job_id,
                 system_prompt=defn.system_prompt,
                 max_turns=1,
             )

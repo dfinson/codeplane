@@ -42,6 +42,7 @@ from backend.api import (
     policy_settings,
     preview,
     projects,
+    session_coordination,
     settings,
     share,
     sidecar_templates,
@@ -205,6 +206,7 @@ def _register_routes(app: FastAPI) -> None:
     """Register all API routers."""
     app.include_router(health.router, prefix="/api")
     app.include_router(jobs.router, prefix="/api")
+    app.include_router(session_coordination.router, prefix="/api")
     app.include_router(job_artifacts.router, prefix="/api")
     app.include_router(job_telemetry.router, prefix="/api")
     app.include_router(utility_sessions.router, prefix="/api")

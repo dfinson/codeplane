@@ -37,11 +37,11 @@ class TestListCredentials:
 
 class TestProviderGuidance:
     @pytest.mark.asyncio
-    async def test_returns_guidance_for_all_three_providers(self, client: AsyncClient) -> None:
+    async def test_returns_guidance_for_supported_providers(self, client: AsyncClient) -> None:
         resp = await client.get("/api/settings/credentials/guidance")
         assert resp.status_code == 200
         guidance = resp.json()["guidance"]
-        assert set(guidance) == {"github", "jira", "azure_devops"}
+        assert set(guidance) == {"github", "jira", "azure_devops", "copilot"}
         for text in guidance.values():
             assert isinstance(text, str)
             assert text

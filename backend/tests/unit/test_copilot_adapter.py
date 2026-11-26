@@ -1453,6 +1453,103 @@ class TestTfEventEmission:
 # ---------------------------------------------------------------------------
 
 
+class TestExplicitInferenceAccount:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("resume", "fallback"), [(False, False), (True, False), (True, True)])
+    async def test_primary_and_resume_fallback_keep_explicit_token(self, adapter, resume, fallback):
+        client = _FakeCopilotClient()
+        client.create_session = AsyncMock(wraps=client.create_session)
+        client.resume_session = AsyncMock(
+            wraps=client.resume_session,
+            side_effect=_FakeJsonRpcError("not resumable") if fallback else None,
+        )
+        with (
+            patch(
+                "backend.services.inference_account.resolve_inference_token", AsyncMock(return_value="selected-token")
+            ),
+            patch("backend.services.copilot_adapter._peer_tools.build_peer_tools", return_value=["peer-tool-sentinel"]),
+            patch("copilot.CopilotClient", return_value=client) as factory,
+        ):
+            session_id = await adapter.create_session(
+                _make_config(
+                    copilot_credential_id="account-a",
+                    resume_sdk_session_id="old" if resume else None,
+                )
+            )
+        factory.assert_called_once_with(github_token="selected-token", use_logged_in_user=False)
+        if not resume or fallback:
+            assert client.create_session.await_args.kwargs["github_token"] == "selected-token"
+            assert client.create_session.await_args.kwargs["tools"] == ["peer-tool-sentinel"]
+        else:
+            client.create_session.assert_not_awaited()
+        if resume:
+            assert client.resume_session.await_args.kwargs["github_token"] == "selected-token"
+            assert client.resume_session.await_args.kwargs["tools"] == ["peer-tool-sentinel"]
+        await adapter.abort_session(session_id)
+
+    @pytest.mark.asyncio
+    async def test_missing_credential_does_not_create_sdk_client(self, adapter):
+        from backend.services.inference_account import InferenceAccountError
+
+        with (
+            patch(
+                "backend.services.inference_account.resolve_inference_token",
+                AsyncMock(side_effect=InferenceAccountError("missing")),
+            ),
+            patch("copilot.CopilotClient") as factory,
+            pytest.raises(InferenceAccountError),
+        ):
+            await adapter.complete("helper")
+        factory.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("error_event", [False, True])
+    async def test_completion_uses_account_and_rejects_session_auth_error(self, adapter, error_event):
+        from backend.services.inference_account import InferenceAccountError
+
+        session = _FakeCopilotSession()
+        client = _FakeCopilotClient()
+        client.create_session = AsyncMock(return_value=session)
+        session.on = lambda callback: callback(
+            _FakeSdkSessionEvent(
+                "session.error" if error_event else "assistant.message",
+                _FakeEventData(content="answer", message="selected-token"),
+            )
+        )
+        with (
+            patch(
+                "backend.services.inference_account.resolve_inference_token", AsyncMock(return_value="selected-token")
+            ),
+            patch("copilot.CopilotClient", return_value=client) as factory,
+        ):
+            if error_event:
+                with pytest.raises(InferenceAccountError, match="selected Copilot credential") as error:
+                    await adapter.complete("helper")
+                assert "selected-token" not in str(error.value)
+            else:
+                assert (await adapter.complete("helper")).text == "answer"
+        factory.assert_called_once_with(github_token="selected-token", use_logged_in_user=False)
+        assert client.create_session.await_args.kwargs["github_token"] == "selected-token"
+
+    @pytest.mark.asyncio
+    async def test_revoked_token_fails_without_ambient_retry(self, adapter):
+        from backend.services.inference_account import InferenceAccountError
+
+        client = _FakeCopilotClient()
+        client.create_session = AsyncMock(side_effect=_FakeJsonRpcError("selected-token"))
+        with (
+            patch(
+                "backend.services.inference_account.resolve_inference_token", AsyncMock(return_value="selected-token")
+            ),
+            patch("copilot.CopilotClient", return_value=client) as factory,
+            pytest.raises(InferenceAccountError) as error,
+        ):
+            await adapter.complete("helper")
+        factory.assert_called_once_with(github_token="selected-token", use_logged_in_user=False)
+        assert client.create_session.await_count == 1
+        assert "selected-token" not in str(error.value)
+
+
 class TestComplete:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

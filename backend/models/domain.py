@@ -668,6 +668,7 @@ class SessionConfig:
     prompt: str
     job_id: str = ""
     sdk: str = "copilot"
+    copilot_credential_id: str | None = None
     model: str | None = None
     mcp_servers: dict[str, MCPServerConfig] = field(default_factory=dict)
     protected_paths: list[str] = field(default_factory=list)
@@ -687,6 +688,8 @@ class SessionConfig:
     # Telemetry dimension — classifies this session for cost tracking.
     # "job" for main agent sessions, or "preflight", "narrator", "sidecar" for sidecar sessions.
     session_kind: SessionKind = "job"
+    peer_directory_handler: Callable[[int], Awaitable[dict[str, Any]]] | None = None
+    peer_message_handler: Callable[[str, str, str, str | None], Awaitable[dict[str, Any]]] | None = None
 
 
 @dataclass
@@ -704,6 +707,7 @@ class JobSpec:
     preset: Preset = Preset.supervised
     model: str | None = None
     sdk: str | None = None
+    copilot_credential_id: str | None = None
     verify: bool | None = None
     self_review: bool | None = None
     max_turns: int | None = None
@@ -854,6 +858,8 @@ class Job:
     preset: Preset = Preset.supervised
     session_count: int = 1
     sdk_session_id: str | None = None
+    copilot_credential_id: str | None = None
+    copilot_credential_label: str | None = None
     model: str | None = None
     sdk: str = "copilot"
     failure_reason: str | None = None

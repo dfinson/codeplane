@@ -599,6 +599,7 @@ def build_session_config(
         job_id=job.id,
         model=job.model,
         sdk=job.sdk,
+        copilot_credential_id=job.copilot_credential_id,
         mcp_servers=mcp_servers,
         protected_paths=protected_paths,
     )

@@ -8,11 +8,12 @@ import time
 import uuid
 from datetime import UTC, datetime
 from subprocess import TimeoutExpired
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 import structlog
 from traceforge.types import ToolMotivation
 
+from backend.models.domain import StateConflictError
 from backend.models.events import EventKind, SessionEvent, new_event
 from backend.services.adapters.agent_adapter import CODEPLANE_SYSTEM_PROMPT, CompletionResult
 from backend.services.adapters.base_adapter import (
@@ -60,6 +61,10 @@ if TYPE_CHECKING:
 log = structlog.get_logger()
 
 
+class _InferenceAuthKwargs(TypedDict, total=False):
+    github_token: str
+
+
 def _sdk_excluded_tools(tools: list[str] | None) -> list[str] | None:
     if tools is not None and "*" in tools:
         return ["builtin:*", "mcp:*", "custom:*"]
@@ -87,6 +92,7 @@ class CopilotAdapter(BaseAgentAdapter):
             session_factory=session_factory,
         )
         self._sessions: dict[str, CopilotSession] = {}
+        self._session_credentials: dict[str, str | None] = {}
         self._cleanup_tasks: dict[str, asyncio.Task[None]] = {}
 
         # Tool-call buffer: tool_call_id -> {job_id, tool_name, arguments, intent, title, start}
@@ -121,6 +127,7 @@ class CopilotAdapter(BaseAgentAdapter):
         if client is not None:
             await self._stop_client(client)
         self._sessions.pop(session_id, None)
+        self._session_credentials.pop(session_id, None)
         # Drop any un-drained tool-buffer entries for this job.
         job_id = self._session_to_job.get(session_id)
         if job_id:
@@ -571,7 +578,16 @@ class CopilotAdapter(BaseAgentAdapter):
     async def create_session(self, config: SessionConfig) -> str:
         from copilot._jsonrpc import JsonRpcError, ProcessExitedError
 
-        client = create_copilot_client()
+        from backend.services.copilot_adapter._peer_tools import build_peer_tools
+
+        peer_tools = build_peer_tools(config)
+        from backend.services.inference_account import resolve_inference_token
+
+        token = await resolve_inference_token(
+            self._session_factory, job_id=config.job_id, credential_id=config.copilot_credential_id
+        )
+        client = create_copilot_client(github_token=token) if token else create_copilot_client()
+        auth_kwargs: _InferenceAuthKwargs = {"github_token": token} if token else {}
 
         # Thin closure that delegates to the instance method, capturing only `config`.
         async def _on_permission(
@@ -624,39 +640,50 @@ class CopilotAdapter(BaseAgentAdapter):
                 try:
                     session = await client.resume_session(
                         _resume_id,
+                        **auth_kwargs,
                         on_permission_request=_on_permission,
                         working_directory=config.workspace_path,
                         model=config.model or None,
                         available_tools=available_tools,
+                        tools=peer_tools,
                     )
                     log.info("sdk_session_resumed", sdk_session_id=_resume_id)
                 except (JsonRpcError, ProcessExitedError, ConnectionError, TimeoutError):
-                    log.warning("sdk_session_resume_failed_creating_new", sdk_session_id=_resume_id, exc_info=True)
+                    log.warning("sdk_session_resume_failed_creating_new", sdk_session_id=_resume_id, exc_info=not token)
                     session = await client.create_session(
+                        **auth_kwargs,
                         on_permission_request=_on_permission,
                         working_directory=config.workspace_path,
                         system_message=system_message,
                         model=config.model or None,
                         available_tools=available_tools,
+                        tools=peer_tools,
                         excluded_tools=_sdk_excluded_tools(config.disallowed_tools or None),
                     )
             else:
                 session = await client.create_session(
+                    **auth_kwargs,
                     on_permission_request=_on_permission,
                     working_directory=config.workspace_path,
                     system_message=system_message,
                     model=config.model or None,
                     available_tools=available_tools,
+                    tools=peer_tools,
                     excluded_tools=_sdk_excluded_tools(config.disallowed_tools or None),
                 )
-        except BaseException:
+        except BaseException as exc:
             await self._stop_client(client)
+            if token and isinstance(exc, Exception):
+                from backend.services.inference_account import InferenceAccountError
+
+                raise InferenceAccountError("Session failed for the selected Copilot credential") from None
             raise
 
         session_id = session.session_id  # Use SDK-assigned ID as CodePlane's session identifier
         queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue()
         self._queues[session_id] = queue
         self._sessions[session_id] = session
+        self._session_credentials[session_id] = config.copilot_credential_id
         self._clients[session_id] = client
 
         # Wire telemetry mapping before registering the callback so
@@ -691,8 +718,12 @@ class CopilotAdapter(BaseAgentAdapter):
         # Send initial prompt — cleanup on any failure.
         try:
             await session.send(config.prompt, mode="immediate")
-        except BaseException:
+        except BaseException as exc:
             await self._cleanup_session(session_id)
+            if token and isinstance(exc, Exception):
+                from backend.services.inference_account import InferenceAccountError
+
+                raise InferenceAccountError("Session failed for the selected Copilot credential") from None
             raise
         log.info("copilot_session_created", session_id=session_id)
         return str(session_id)
@@ -720,6 +751,17 @@ class CopilotAdapter(BaseAgentAdapter):
         finally:
             await self._cleanup_session(session_id)
 
+    async def _validate_session_account(self, session_id: str) -> None:
+        from backend.services.inference_account import inference_scope, resolve_inference_token
+
+        # A peer caller's task-local account must not replace the recipient's binding.
+        with inference_scope():
+            await resolve_inference_token(
+                self._session_factory,
+                job_id=self._session_to_job.get(session_id),
+                credential_id=self._session_credentials.get(session_id),
+            )
+
     async def send_message(self, session_id: str, message: str) -> None:
         from copilot._jsonrpc import JsonRpcError, ProcessExitedError
 
@@ -727,10 +769,24 @@ class CopilotAdapter(BaseAgentAdapter):
         if session is None:
             log.warning("copilot_send_no_session", session_id=session_id)
             return
+        await self._validate_session_account(session_id)
         try:
             await session.send(message, mode="immediate")
         except (JsonRpcError, ProcessExitedError, ConnectionError):
             log.warning("copilot_send_message_failed", session_id=session_id, exc_info=True)
+
+    async def send_peer_message(self, session_id: str, message: str) -> None:
+        session = self._sessions.get(session_id)
+        if session is None:
+            raise StateConflictError("The target SDK session is no longer active")
+        await self._validate_session_account(session_id)
+        if (
+            self._sessions.get(session_id) is not session
+            or session_id in self._paused_sessions
+            or session_id in self._cleanup_tasks
+        ):
+            raise StateConflictError("The target SDK session is no longer active or is paused")
+        await session.send(message, mode="enqueue")
 
     async def interrupt_session(self, session_id: str) -> None:
         from copilot._jsonrpc import JsonRpcError, ProcessExitedError
@@ -765,13 +821,15 @@ class CopilotAdapter(BaseAgentAdapter):
         excluded_tools: list[str] | None = None,
     ) -> CompletionResult:
         """Create a minimal session for single-turn completion, collect the response."""
-        from copilot import CopilotClient
         from copilot._jsonrpc import JsonRpcError, ProcessExitedError
         from copilot.generated.rpc import PermissionDecisionApproveOnce
 
         from backend.services.adapters.agent_adapter import CompletionResult
+        from backend.services.inference_account import InferenceAccountError, resolve_inference_token
 
-        client = CopilotClient()
+        token = await resolve_inference_token(self._session_factory)
+        client = create_copilot_client(github_token=token) if token else create_copilot_client()
+        auth_kwargs: _InferenceAuthKwargs = {"github_token": token} if token else {}
         tmp_session_id = str(uuid.uuid4())
         queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue()
         self._queues[tmp_session_id] = queue
@@ -792,6 +850,7 @@ class CopilotAdapter(BaseAgentAdapter):
                 }
 
             session = await client.create_session(
+                **auth_kwargs,
                 working_directory=tempfile.gettempdir(),
                 on_permission_request=_noop_permission,
                 model=model or None,
@@ -802,8 +861,10 @@ class CopilotAdapter(BaseAgentAdapter):
 
             collected: list[str] = []
             done_event = asyncio.Event()
+            failed = False
 
             def _on_event(sdk_event: SdkSessionEvent) -> None:
+                nonlocal failed
                 kind_str = sdk_event.type.value if sdk_event.type else ""
                 payload = sdk_event.data.to_dict() if sdk_event.data else {}
                 log.debug(
@@ -837,7 +898,8 @@ class CopilotAdapter(BaseAgentAdapter):
                     done_event.set()
                 elif kind_str in ("session.task_complete", "session.idle", "session.error", "session.shutdown"):
                     if kind_str == "session.error":
-                        log.warning("complete_sdk_session_error", session_id=tmp_session_id, payload=payload)
+                        failed = True
+                        log.warning("complete_sdk_session_error", session_id=tmp_session_id)
                     done_event.set()
 
             session.on(_on_event)
@@ -846,6 +908,8 @@ class CopilotAdapter(BaseAgentAdapter):
                 await asyncio.wait_for(done_event.wait(), timeout=COMPLETION_TIMEOUT_S)
             except TimeoutError:
                 log.warning("complete_timeout", session_id=tmp_session_id, collected_chunks=len(collected))
+            if token and failed:
+                raise InferenceAccountError("Completion failed for the selected Copilot credential")
             log.debug(
                 "complete_result",
                 session_id=tmp_session_id,
@@ -855,6 +919,8 @@ class CopilotAdapter(BaseAgentAdapter):
             )
             return CompletionResult(text="\n".join(collected))
         except (JsonRpcError, ProcessExitedError, ConnectionError, OSError):
+            if token:
+                raise InferenceAccountError("Completion failed for the selected Copilot credential") from None
             log.error("complete_failed", prompt_len=len(prompt), exc_info=True)
             return CompletionResult()
         finally:

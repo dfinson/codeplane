@@ -34,6 +34,7 @@ import structlog
 
 from backend.models.events import EventKind
 from backend.services.completers.lightweight_completer import LightweightCompleter
+from backend.services.inference_account import inference_scope
 
 if TYPE_CHECKING:
     from backend.models.domain import SessionConfig, SidecarConfig
@@ -87,8 +88,10 @@ class SidecarSession:
         timeout_s: float | None = None,
         model: str | None = None,
         excluded_tools: list[str] | None = None,
+        job_id: str | None = None,
     ) -> None:
         self._adapter = adapter
+        self.job_id = job_id
         self._system_prompt = system_prompt or _DEFAULT_SYSTEM_PROMPT
         self._prime_lock = asyncio.Lock()
         self._primed = False
@@ -134,6 +137,12 @@ class SidecarSession:
             return f"{self._system_prompt}\n\n{prompt}"
 
     async def complete(self, prompt: str, timeout: float = 30.0) -> str:
+        if self.job_id is not None:
+            with inference_scope(job_id=self.job_id):
+                return await self._complete(prompt, timeout)
+        return await self._complete(prompt, timeout)
+
+    async def _complete(self, prompt: str, timeout: float = 30.0) -> str:
         """Send *prompt* to the adapter and return the response text.
 
         Retries once on timeout — empirically 74% of post-timeout retries
@@ -221,6 +230,7 @@ class AgenticSidecarSession:
             workspace_path=config.workspace_path,
             prompt=prompt,
             job_id=config.job_id,
+            copilot_credential_id=config.copilot_credential_id,
             sdk=config.sdk,
             model=config.model,
             mcp_servers=config.mcp_servers,
@@ -412,14 +422,17 @@ class SidecarSessionManager:
         max_turns: int | None = None,
         model: str | None = None,
         excluded_tools: list[str] | None = None,
+        job_id: str | None = None,
     ) -> SidecarSession:
         """Create a disposable one-shot session (not tracked per-job)."""
-        return self._make_session(
+        session = self._make_session(
             system_prompt=system_prompt,
             max_turns=max_turns,
             model=model,
             excluded_tools=excluded_tools,
         )
+        session.job_id = job_id
+        return session
 
     # -- Pre-warm (new-job panel) -------------------------------------------
 
@@ -489,6 +502,7 @@ class SidecarSessionManager:
         else:
             session = self._pop_or_create()
 
+        session.job_id = job_id
         job_sidecars[name] = session
         log.debug("sidecar_session_opened", job_id=job_id, name=name)
         return session
@@ -571,12 +585,13 @@ class SidecarSessionManager:
 
     # -- Non-job one-shot (Completable protocol) -----------------------------
 
-    async def complete(self, prompt: str, timeout: float = 30.0) -> str:
+    async def complete(self, prompt: str, timeout: float = 30.0, *, job_id: str | None = None) -> str:
         """One-shot completion for callers without a job context.
 
         Routes through the SDK adapter via a pooled SidecarSession.
         """
         session = self._pop_or_create()
+        session.job_id = job_id
         try:
             for attempt in range(_TIMEOUT_RETRIES + 1):
                 try:
@@ -590,6 +605,7 @@ class SidecarSessionManager:
             log.warning("sidecar_oneshot_failed", exc_info=True)
             return ""
         finally:
+            session.job_id = None
             self._accumulate_global(session)
             if len(self._pool) < self._pool_size:
                 session._primed = False  # noqa: SLF001

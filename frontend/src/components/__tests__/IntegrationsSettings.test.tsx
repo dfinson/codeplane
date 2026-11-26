@@ -67,6 +67,25 @@ it("requires and submits the Jira account email", async () => {
 });
 
 describe("IntegrationsSettings", () => {
+  it("registers separate encrypted Copilot credentials without a tracker endpoint", async () => {
+    vi.mocked(createCredential).mockResolvedValue({
+      id: "inference-a", provider: "copilot", label: "Personal inference",
+      baseUrl: "https://github.com", email: null, requiresEmailUpdate: false, createdAt: "2026-01-01",
+    });
+    render(<IntegrationsSettings />);
+    await screen.findByText(/fine-grained PAT/);
+    fireEvent.click(screen.getByRole("button", { name: "Copilot inference" }));
+    expect(screen.queryByLabelText("Base URL")).not.toBeInTheDocument();
+    expect(screen.getByText(/not a verified billing identity/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Label"), { target: { value: "Personal inference" } });
+    fireEvent.change(screen.getByLabelText("Personal Access Token"), { target: { value: "private-token" } });
+    fireEvent.click(screen.getByRole("button", { name: /Register Credential/ }));
+    await waitFor(() => expect(createCredential).toHaveBeenCalledWith({
+      provider: "copilot", label: "Personal inference", baseUrl: "https://github.com", pat: "private-token", email: null,
+    }));
+    await waitFor(() => expect(screen.getByLabelText("Personal Access Token")).toHaveValue(""));
+  });
+
   it("renders the empty state after loading", async () => {
     render(<IntegrationsSettings />);
     await waitFor(() => {

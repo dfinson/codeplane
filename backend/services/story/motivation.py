@@ -198,7 +198,10 @@ class MotivationService:
                         job_description=job_descriptions.get(span["job_id"]),
                     )
                     full_prompt = f"SYSTEM:\n{_SYSTEM_PROMPT}\n\nUSER:\n{prompt}"
-                    result = await self._completer.complete(full_prompt)
+                    from backend.services.inference_account import inference_scope
+
+                    with inference_scope(job_id=span["job_id"]):
+                        result = await self._completer.complete(full_prompt)
                     summary_text = result if isinstance(result, str) else getattr(result, "text", str(result))
                     summary_text = summary_text.strip()
 
@@ -251,7 +254,10 @@ class MotivationService:
                         file_level_summary=span.get("motivation_summary"),
                     )
                     full_prompt = f"SYSTEM:\n{_EDIT_SYSTEM_PROMPT}\n\nUSER:\n{prompt}"
-                    result = await self._completer.complete(full_prompt)
+                    from backend.services.inference_account import inference_scope
+
+                    with inference_scope(job_id=span["job_id"]):
+                        result = await self._completer.complete(full_prompt)
                     summary_text = result if isinstance(result, str) else getattr(result, "text", str(result))
                     summary_text = summary_text.strip()
 

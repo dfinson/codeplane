@@ -22,7 +22,7 @@ from backend.services.copilot_adapter._client import create_copilot_client
 log = structlog.get_logger(__name__)
 
 
-async def fetch_copilot_models_raw() -> list[dict[str, Any]]:
+async def fetch_copilot_models_raw(*, github_token: str | None = None) -> list[dict[str, Any]]:
     """Start a CopilotClient, fetch raw model dicts, and stop it.
 
     Tolerates missing ``billing.multiplier`` by defaulting it to ``1.0``
@@ -43,9 +43,9 @@ async def fetch_copilot_models_raw() -> list[dict[str, Any]]:
 
     from copilot.client import ModelInfo
 
-    client = create_copilot_client()
-    await client.start()
+    client = create_copilot_client(github_token=github_token) if github_token else create_copilot_client()
     try:
+        await client.start()
         # pylint: disable=protected-access  # JsonRpcClient not exposed publicly
         if not client._client:  # noqa: SLF001
             raise RuntimeError("CopilotClient started but internal RPC client is not set")

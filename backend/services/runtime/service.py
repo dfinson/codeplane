@@ -39,6 +39,7 @@ from backend.models.domain import (
     Resolution,
     ServiceInitError,
     SessionConfig,
+    StateConflictError,
 )
 from backend.models.events import (
     TRANSCRIPT_KINDS,
@@ -104,6 +105,7 @@ class AgentSession:
     def __init__(self) -> None:
         self._session_id: str | None = None
         self._adapter: AgentAdapterInterface | None = None
+        self.tools_paused = False
 
     @property
     def session_id(self) -> str | None:
@@ -128,16 +130,23 @@ class AgentSession:
             await self._adapter.interrupt_session(self._session_id)
 
     def pause_tools(self) -> None:
+        self.tools_paused = True
         if self._adapter and self._session_id:
             self._adapter.pause_tools(self._session_id)
 
     def resume_tools(self) -> None:
+        self.tools_paused = False
         if self._adapter and self._session_id:
             self._adapter.resume_tools(self._session_id)
 
     async def abort(self) -> None:
         if self._adapter and self._session_id:
             await self._adapter.abort_session(self._session_id)
+
+    async def send_peer_message(self, message: str) -> None:
+        if self.tools_paused or self._adapter is None or self._session_id is None:
+            raise StateConflictError("Recipient is paused or has no live SDK session")
+        await self._adapter.send_peer_message(self._session_id, message)
 
 
 class EventAction(enum.Enum):
@@ -398,6 +407,7 @@ class RuntimeService:
         return self._adapter_registry.get_adapter(sdk)
 
     def _make_job_service(self, session: AsyncSession) -> JobService:
+        from backend.persistence.credential_repo import CredentialRepository
         from backend.persistence.project_repo import ProjectRepository
 
         return JobService(
@@ -406,6 +416,7 @@ class RuntimeService:
             config=self._config,
             event_bus=self._event_bus,
             project_repo=ProjectRepository(session),
+            credential_repo=CredentialRepository(session),
         )
 
     async def _get_job(self, job_id: str) -> Job | None:
@@ -461,7 +472,7 @@ class RuntimeService:
                 return
 
             if needs_title:
-                title = await self._generate_title_safe(context)
+                title = await self._generate_title_safe(context, job_id=job_id)
                 if title:
                     from backend.persistence.database import serialized_write
 
@@ -478,7 +489,7 @@ class RuntimeService:
                     log.info("finalize_title_generated", job_id=job_id, title=title)
 
             if needs_description:
-                desc = await self._generate_description_safe(context)
+                desc = await self._generate_description_safe(context, job_id=job_id)
                 if desc:
                     from backend.persistence.database import serialized_write
 
@@ -492,7 +503,7 @@ class RuntimeService:
         except Exception:
             log.debug("finalize_naming_failed", job_id=job_id, exc_info=True)
 
-    async def _generate_title_safe(self, context: str) -> str | None:
+    async def _generate_title_safe(self, context: str, *, job_id: str | None = None) -> str | None:
         """One-shot title generation via sidecar. Returns None on failure."""
         try:
             sidecar_sessions = self._sidecar_sessions
@@ -503,13 +514,13 @@ class RuntimeService:
                 "Respond with ONLY the title text, no quotes, no punctuation at the end.\n\n"
                 f"Task:\n{context}"
             )
-            title = await sidecar_sessions.complete(prompt, timeout=10.0)
+            title = await sidecar_sessions.complete(prompt, timeout=10.0, job_id=job_id)
             title = str(title).strip().strip('"').strip("'")
             return title if title and len(title) >= 3 else None
         except Exception:
             return None
 
-    async def _generate_description_safe(self, context: str) -> str | None:
+    async def _generate_description_safe(self, context: str, *, job_id: str | None = None) -> str | None:
         """One-shot description generation via sidecar. Returns None on failure."""
         try:
             sidecar_sessions = self._sidecar_sessions
@@ -521,7 +532,7 @@ class RuntimeService:
                 "Respond with ONLY the description text.\n\n"
                 f"Task:\n{context}"
             )
-            desc = await sidecar_sessions.complete(prompt, timeout=10.0)
+            desc = await sidecar_sessions.complete(prompt, timeout=10.0, job_id=job_id)
             desc = str(desc).strip()
             return desc if desc and len(desc) >= 10 else None
         except Exception:
@@ -1782,6 +1793,35 @@ class RuntimeService:
         made_progress = False
         downgrade: tuple[str, str] | None = None
 
+        if config.sdk == "copilot":
+            from backend.models.api_schemas import PeerMessageRequest
+            from backend.services.session_coordination import SessionCoordination
+
+            coordination = SessionCoordination(self._session_factory, self)
+
+            async def peer_directory(offset: int = 0) -> dict[str, Any]:
+                if self.current_peer_session(job_id) is not agent_session:
+                    raise StateConflictError("The sending execution is no longer active")
+                return (await coordination.directory(job_id, offset)).model_dump(mode="json", by_alias=True)
+
+            async def peer_message(
+                message_id: str, recipient_id: str, content: str, reply_to: str | None
+            ) -> dict[str, Any]:
+                receipt = await coordination.send(
+                    job_id,
+                    PeerMessageRequest(
+                        message_id=message_id, recipient_job_id=recipient_id,
+                        content=content, reply_to=reply_to,
+                    ),
+                    origin="agent",
+                    sender_execution=agent_session,
+                )
+                return receipt.model_dump(mode="json", by_alias=True)
+
+            config = dataclass_replace(
+                config, peer_directory_handler=peer_directory, peer_message_handler=peer_message
+            )
+
         async for session_event in agent_session.execute(config, self._resolve_adapter(config.sdk)):
             made_progress = made_progress or _session_event_counts_as_resume_progress(session_event)
 
@@ -2235,6 +2275,24 @@ class RuntimeService:
         # Suppress the SDK echo — the sidecar events already provide UI visibility.
         self._echo_suppress.setdefault(job_id, set()).add(message)
         return True
+
+    def current_peer_session(self, job_id: str) -> AgentSession | None:
+        task = self._tasks.get(job_id)
+        if task is None or task.done() or task.cancelling() or self._active_gates.get(job_id):
+            return None
+        session = self._agent_sessions.get(job_id)
+        if session is None or session.tools_paused or session.session_id is None:
+            return None
+        return session
+
+    async def deliver_peer_note(self, job_id: str, target: AgentSession, message: str) -> None:
+        if self.current_peer_session(job_id) is not target:
+            raise StateConflictError("Recipient execution changed before dispatch")
+        self._echo_suppress.setdefault(job_id, set()).add(message)
+        await target.send_peer_message(message)
+
+    async def publish_peer_note(self, event: SessionEvent) -> None:
+        await self._event_bus.publish(event)
 
     async def resolve_policy_batch(
         self,

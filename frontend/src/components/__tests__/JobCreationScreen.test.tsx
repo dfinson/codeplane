@@ -7,6 +7,7 @@ import { MemoryRouter } from "react-router-dom";
 vi.mock("../../api/client", () => ({
   createJob: vi.fn(),
   fetchProjects: vi.fn(),
+  fetchCredentials: vi.fn().mockResolvedValue({ credentials: [] }),
   fetchModels: vi.fn(),
   fetchSDKs: vi.fn(),
   fetchSettings: vi.fn(),
@@ -62,6 +63,7 @@ import {
   fetchModels,
   fetchRepoDetail,
   fetchProjects,
+  fetchCredentials,
   fetchSDKs,
   fetchSettings,
   fetchPolicySettings,
@@ -101,6 +103,7 @@ vi.mock("react-router-dom", async () => {
 
 beforeEach(() => {
   vi.mocked(createJob).mockReset();
+  vi.mocked(fetchCredentials).mockResolvedValue({ credentials: [] });
   vi.mocked(fetchProjects).mockResolvedValue({ items: [{ id: "p1", name: "My Project", repoPaths: ["/repos/my-app"] }] } as any);
   vi.mocked(fetchModels).mockResolvedValue([
     { id: "gpt-5.4-mini", name: "GPT-5.4 Mini" },
@@ -144,6 +147,40 @@ describe("JobCreationScreen", () => {
   it("renders New Job heading", async () => {
     await renderScreen();
     expect(screen.getByText("New Job")).toBeInTheDocument();
+  });
+
+  it("uses the chosen account for catalog, naming, and creation", async () => {
+    vi.mocked(fetchCredentials).mockResolvedValue({ credentials: [{
+      id: "account-a", provider: "copilot", label: "Personal inference", baseUrl: "https://github.com",
+      createdAt: "2026-01-01", email: null, requiresEmailUpdate: false,
+    }] });
+    vi.mocked(createJob).mockResolvedValue({ id: "selected-job" } as any);
+    await renderScreen();
+    selectRepository();
+    await screen.findByRole("option", { name: "Personal inference" });
+    fireEvent.change(screen.getByLabelText("Copilot inference account"), { target: { value: "account-a" } });
+    await waitFor(() => expect(fetchModels).toHaveBeenCalledWith("copilot", "account-a"));
+    fireEvent.change(screen.getByTestId("prompt-input"), { target: { value: "Fix bug" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Create Job" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Create Job" }));
+    await waitFor(() => expect(createJob).toHaveBeenCalledWith(expect.objectContaining({ copilotCredentialId: "account-a" })));
+    expect(suggestNames).toHaveBeenCalledWith("Fix bug", "account-a");
+  });
+
+  it("does not fall back to ambient models when selected account discovery fails", async () => {
+    vi.mocked(fetchCredentials).mockResolvedValue({ credentials: [{
+      id: "account-a", provider: "copilot", label: "Unavailable", baseUrl: "https://github.com",
+      createdAt: "2026-01-01", email: null, requiresEmailUpdate: false,
+    }] });
+    await renderScreen();
+    selectRepository();
+    vi.mocked(fetchModels).mockRejectedValueOnce(new Error("revoked"));
+    await screen.findByRole("option", { name: "Unavailable" });
+    fireEvent.change(screen.getByLabelText("Copilot inference account"), { target: { value: "account-a" } });
+    expect(await screen.findByRole("alert")).toHaveTextContent("No ambient fallback");
+    fireEvent.change(screen.getByTestId("prompt-input"), { target: { value: "Fix bug" } });
+    expect(screen.getByRole("button", { name: "Create Job" })).toBeDisabled();
+    expect(screen.queryByRole("option", { name: "GPT-5.4" })).not.toBeInTheDocument();
   });
 
   it("renders Repository label", async () => {

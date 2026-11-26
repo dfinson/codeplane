@@ -352,7 +352,10 @@ class MonitorSession:
         )
 
         try:
-            result = await self._completer.complete(prompt)
+            from backend.services.inference_account import inference_scope
+
+            with inference_scope(job_id=self._job_id):
+                result = await self._completer.complete(prompt)
             verdict_text = result.text.strip().lower() if result.text else ""
         except Exception:
             log.warning("monitor_llm_error", job_id=self._job_id, exc_info=True)

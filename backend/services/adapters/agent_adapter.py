@@ -111,6 +111,10 @@ class AgentAdapterInterface(ABC):
     async def send_message(self, session_id: str, message: str) -> None:
         """Send a follow-up message into a running session."""
 
+    async def send_peer_message(self, session_id: str, message: str) -> None:
+        """Queue a peer note, raising if acceptance cannot be confirmed."""
+        raise NotImplementedError("This adapter does not support peer delivery")
+
     @abstractmethod
     async def abort_session(self, session_id: str) -> None:
         """Abort the current message processing and destroy the session."""

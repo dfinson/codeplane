@@ -287,6 +287,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Session Directory */
+        get: operations["session_directory_api_jobs__job_id__sessions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/peer-messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Peer Messages */
+        get: operations["peer_messages_api_jobs__job_id__peer_messages_get"];
+        put?: never;
+        /** Relay Peer Message */
+        post: operations["relay_peer_message_api_jobs__job_id__peer_messages_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}/logs": {
         parameters: {
             query?: never;
@@ -1956,33 +1991,33 @@ export interface paths {
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        get: operations["preview_proxy_api_preview__port___path__put"];
+        get: operations["preview_proxy_api_preview__port___path__get"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        put: operations["preview_proxy_api_preview__port___path__put"];
+        put: operations["preview_proxy_api_preview__port___path__get"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        post: operations["preview_proxy_api_preview__port___path__put"];
+        post: operations["preview_proxy_api_preview__port___path__get"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        delete: operations["preview_proxy_api_preview__port___path__put"];
+        delete: operations["preview_proxy_api_preview__port___path__get"];
         options?: never;
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        head: operations["preview_proxy_api_preview__port___path__put"];
+        head: operations["preview_proxy_api_preview__port___path__get"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        patch: operations["preview_proxy_api_preview__port___path__put"];
+        patch: operations["preview_proxy_api_preview__port___path__get"];
         trace?: never;
     };
     "/api/jobs/{job_id}/share": {
@@ -3556,6 +3591,8 @@ export interface components {
             model?: string | null;
             /** Sdk */
             sdk?: string | null;
+            /** Copilotcredentialid */
+            copilotCredentialId?: string | null;
             /** Verify */
             verify?: boolean | null;
             /** Selfreview */
@@ -3590,6 +3627,10 @@ export interface components {
              * @default copilot
              */
             sdk: string;
+            /** Copilotcredentialid */
+            copilotCredentialId?: string | null;
+            /** Copilotcredentiallabel */
+            copilotCredentialLabel?: string | null;
             /**
              * Createdat
              * Format: date-time
@@ -4436,6 +4477,10 @@ export interface components {
              * @default copilot
              */
             sdk: string;
+            /** Copilotcredentialid */
+            copilotCredentialId?: string | null;
+            /** Copilotcredentiallabel */
+            copilotCredentialLabel?: string | null;
             /** Worktreename */
             worktreeName?: string | null;
             /** Verify */
@@ -4461,6 +4506,13 @@ export interface components {
             source: string;
             /** Externalsessionid */
             externalSessionId?: string | null;
+            /** Sdksessionid */
+            sdkSessionId?: string | null;
+            /**
+             * Sessioncount
+             * @default 1
+             */
+            sessionCount: number;
             /** @default standard */
             mode: components["schemas"]["JobMode"];
             /** Totalcostusd */
@@ -5285,6 +5337,61 @@ export interface components {
              */
             totalWasteUsd: number;
         };
+        /** PeerMessageListResponse */
+        PeerMessageListResponse: {
+            /** Items */
+            items?: components["schemas"]["PeerMessageResponse"][];
+            /**
+             * Hasmore
+             * @default false
+             */
+            hasMore: boolean;
+        };
+        /** PeerMessageRequest */
+        PeerMessageRequest: {
+            /** Messageid */
+            messageId: string;
+            /** Recipientjobid */
+            recipientJobId: string;
+            /** Content */
+            content: string;
+            /** Replyto */
+            replyTo?: string | null;
+        };
+        /** PeerMessageResponse */
+        PeerMessageResponse: {
+            /** Messageid */
+            messageId: string;
+            /** Senderjobid */
+            senderJobId: string;
+            /** Recipientjobid */
+            recipientJobId: string;
+            /** Sendersessionid */
+            senderSessionId: string | null;
+            /** Recipientsessionid */
+            recipientSessionId: string | null;
+            /**
+             * Origin
+             * @enum {string}
+             */
+            origin: "agent" | "operator";
+            /** Content */
+            content: string;
+            /** Replyto */
+            replyTo: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "accepted" | "rejected" | "unknown";
+            /** Detail */
+            detail: string;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+        };
         /** PinMetricRequest */
         PinMetricRequest: {
             /** Name */
@@ -6076,6 +6183,25 @@ export interface components {
              */
             timestamp: string;
         };
+        /** SessionDirectoryResponse */
+        SessionDirectoryResponse: {
+            job: components["schemas"]["JobResponse"];
+            parent?: components["schemas"]["JobResponse"] | null;
+            /** Children */
+            children?: components["schemas"]["JobResponse"][];
+            /**
+             * Childrenhasmore
+             * @default false
+             */
+            childrenHasMore: boolean;
+            /** Peers */
+            peers?: components["schemas"]["JobResponse"][];
+            /**
+             * Peershasmore
+             * @default false
+             */
+            peersHasMore: boolean;
+        };
         /** SettingsResponse */
         SettingsResponse: {
             /** Maxconcurrentjobs */
@@ -6419,6 +6545,8 @@ export interface components {
         };
         /** SuggestNamesRequest */
         SuggestNamesRequest: {
+            /** Copilotcredentialid */
+            copilotCredentialId?: string | null;
             /** Prompt */
             prompt: string;
             /** Repo */
@@ -8065,6 +8193,7 @@ export interface operations {
             query?: {
                 /** @description SDK id (copilot | claude). Omit for default. */
                 sdk?: string | null;
+                copilotCredentialId?: string | null;
             };
             header?: never;
             path?: never;
@@ -8079,6 +8208,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ModelListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_directory_api_jobs__job_id__sessions_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionDirectoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    peer_messages_api_jobs__job_id__peer_messages_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PeerMessageListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    relay_peer_message_api_jobs__job_id__peer_messages_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PeerMessageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PeerMessageResponse"];
                 };
             };
             /** @description Validation Error */
@@ -10594,7 +10824,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__put: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -10624,7 +10854,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__put: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -10654,7 +10884,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__put: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -10684,7 +10914,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__put: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -10714,7 +10944,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__put: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -10744,7 +10974,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__put: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
