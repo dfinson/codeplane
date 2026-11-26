@@ -1219,31 +1219,34 @@ class CopilotAdapter(BaseAgentAdapter):
                             raise failure
                         response = await pending_response
                         content = response.data.to_dict().get("content") if response and response.data else None
-                        if not isinstance(content, str):
-                            raise UtilityCompletionError(
-                                "Structured completion returned no text", reason="empty_response"
-                            )
-                        collected[:] = [content]
+                        collected[:] = [content] if isinstance(content, str) else []
                     finally:
                         pending_response.cancel()
                         guard.cancel()
                         await asyncio.gather(pending_response, guard, return_exceptions=True)
             if failure is not None:
                 raise failure
-            if tool_attempted:
-                raise UtilityCompletionError("Text-only completion requested tool permission", reason="tool_request")
             text = "\n".join(collected)
-            if len(text.encode("utf-8")) > completion.max_output_bytes:
-                raise UtilityCompletionError("Text-only output exceeds its bound", reason="output_limit")
-            if not text.strip():
-                raise UtilityCompletionError("Text-only completion returned no text", reason="empty_response")
+            oversized = len(text.encode("utf-8")) > completion.max_output_bytes
             result = CompletionResult(
-                text=text,
+                text="" if oversized else text,
                 model=served_model,
                 usage=tuple(usage),
                 input_tokens=sum(int(item.amount) for item in usage if item.unit == "input_tokens"),
                 output_tokens=sum(int(item.amount) for item in usage if item.unit == "output_tokens"),
             )
+            if tool_attempted:
+                raise UtilityCompletionError(
+                    "Text-only completion requested tool permission", reason="tool_request", completion=result
+                )
+            if oversized:
+                raise UtilityCompletionError(
+                    "Text-only output exceeds its bound", reason="output_limit", completion=result
+                )
+            if not text.strip():
+                raise UtilityCompletionError(
+                    "Text-only completion returned no text", reason="empty_response", completion=result
+                )
             validate_completion_identity(model, served_model, completion, result=result)
             if completion.response_schema is not None:
                 result.raw_text = text

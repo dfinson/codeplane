@@ -61,7 +61,7 @@ def test_job_telemetry_report_required_fields() -> None:
     assert report.instance_id == "inst-123"
     assert report.job_id == "job-1"
     assert report.sdk == "copilot"
-    assert report.total_cost_usd == 0.0
+    assert report.total_cost_usd is None
     assert report.model == ""
     assert report.completed_at is None
 

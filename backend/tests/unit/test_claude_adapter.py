@@ -22,6 +22,7 @@ from backend.models.domain import (
 )
 from backend.models.events import TRANSCRIPT_KINDS, EventKind, SessionEvent, new_event
 from backend.services.adapters.base_adapter import PermissionDecision
+from backend.tests.unit.test_approval_service import session_factory as session_factory
 from backend.tests.unit.test_recipe_runs import sessions as sessions
 
 if TYPE_CHECKING:
@@ -1416,6 +1417,54 @@ class TestAbortSession:
 
 
 class TestComplete:
+    @pytest.mark.parametrize("native_text", ["", "   ", "too many bytes", "\u03bb" * 3])
+    async def test_completed_rejection_persists_bounded_usage_receipt(
+        self, adapter: ClaudeAdapter, session_factory, native_text: str
+    ) -> None:
+        from backend.models.execution_contracts import ExecutionContractPin
+        from backend.persistence.event_repo import EventRepository
+        from backend.services.adapters.adapter_registry import AdapterRegistry
+        from backend.services.adapters.agent_adapter import UtilityCompletionError
+        from backend.services.adapters.completion_context import CompletionContext, completion_context
+        from backend.tests.unit.test_execution_contracts import _contract
+
+        registry = AdapterRegistry(session_factory=session_factory)
+        pin = ExecutionContractPin(
+            job_id="job-1", admission_id="admission", budget_id="job-1", contract=_contract("pinned")
+        )
+        calls = 0
+
+        async def query(**kwargs: Any):
+            nonlocal calls
+            calls += 1
+            yield _FakeAssistantMessage(content=[], model="claude-approved")
+            yield _FakeResultMessage(result=native_text, usage={"input_tokens": 7}, total_cost_usd=0.1)
+
+        with (
+            patch.dict(sys.modules["claude_code_sdk"].__dict__, {"query": query}),
+            patch.object(registry, "_resolve_completion_adapter", return_value=adapter),
+            completion_context(
+                CompletionContext(max_output_bytes=4, job_id="job-1", execution_epoch="epoch", execution_contract=pin)
+            ),
+            pytest.raises(UtilityCompletionError) as caught,
+        ):
+            await registry.get_completion_provider("claude").complete("fixture", model="claude-approved")
+        expected = "output_limit" if len(native_text.encode("utf-8")) > 4 else "empty_response"
+        assert caught.value.reason == expected
+        result = caught.value.completion
+        assert result is not None and result.input_tokens == 7 and result.cost_usd == 0.1
+        assert len(result.text.encode("utf-8")) <= 4
+        async with session_factory() as db_session:
+            events = [row.event for row in await EventRepository(db_session).list_after(0, job_id="job-1")]
+        assert [str(event.kind) for event in events] == [
+            "utility.completion.requested",
+            "utility.completion.completed",
+        ]
+        assert events[-1].id == result.usage_event_id
+        assert events[-1].payload["rejection_reason"] == expected
+        assert events[-1].payload["usage"] == [amount.model_dump(mode="json") for amount in result.usage]
+        assert calls == 1
+
     @pytest.mark.parametrize("actual_model", ["claude-unexpected", ""])
     async def test_rejected_model_retains_observed_completion_usage(
         self, adapter: ClaudeAdapter, actual_model: str

@@ -40,20 +40,33 @@ beforeEach(() => {
 });
 
 describe("RepoCost currency evidence", () => {
-  it.each([false, true])("keeps unknown rows and summaries unknown with known rows: %s", async (mixed) => {
+  it.each([false, true])("keeps unknown rows without discarding a verified subtotal: %s", async (mixed) => {
     renderCost([model("unreported", null), ...(mixed ? [model("verified", 4)] : [])]);
     const row = await screen.findByRole("row", { name: /unreported/ });
     expect(within(row).getAllByText("Unknown USD")).toHaveLength(2);
-    expect(screen.getAllByText("Unknown USD")).toHaveLength(4);
+    expect(screen.getAllByText("Unknown USD")).toHaveLength(mixed ? 2 : 4);
     expect(screen.queryByText("$0")).not.toBeInTheDocument();
     if (mixed) {
-      expect(within(screen.getByRole("row", { name: /verified/ })).getByText("$4.00")).toBeInTheDocument();
+      expect(within(screen.getByRole("row", { name: /^verified / })).getByText("$4.00")).toBeInTheDocument();
+      expect(screen.getByText("Verified USD subtotal (30d)").parentElement).toHaveTextContent("$4.00");
+      expect(screen.getByText("Verified USD per job").parentElement).toHaveTextContent("$1.00");
     }
+  });
+
+  it.each([false, true])("keeps the subtotal and all-job rate invariant to model grouping: %s", async (split) => {
+    const known = { ...model("known", 4), jobCount: 1, avgCost: 4 };
+    renderCost(split
+      ? [known, { ...model("unknown", null), jobCount: 1 }]
+      : [{ ...known, jobCount: 2 }]);
+    await screen.findByRole("row", { name: /^known / });
+    expect(screen.getByText("Verified USD subtotal (30d)").parentElement).toHaveTextContent("$4.00");
+    expect(screen.getByText("Verified USD per job").parentElement).toHaveTextContent("$2.00");
+    expect(within(screen.getByRole("row", { name: /^known / })).getAllByText("$4.00")).toHaveLength(2);
   });
 
   it.each([0, 4])("preserves measured costs and averages for %s USD", async (cost) => {
     renderCost([model("verified", cost)]);
-    const row = await screen.findByRole("row", { name: /verified/ });
+    const row = await screen.findByRole("row", { name: /^verified / });
     expect(within(row).getAllByText(cost === 0 ? "$0" : "$4.00")).toHaveLength(cost === 0 ? 2 : 1);
     expect(screen.getAllByText(cost === 0 ? "$0" : "$2.00")).toHaveLength(cost === 0 ? 4 : 2);
     expect(screen.queryByText("Unknown USD")).not.toBeInTheDocument();

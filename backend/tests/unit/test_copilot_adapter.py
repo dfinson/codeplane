@@ -22,6 +22,7 @@ from backend.models.domain import (
 from backend.models.events import TRANSCRIPT_KINDS, EventKind, SessionEvent, new_event
 from backend.services.adapters import agent_adapter
 from backend.services.completers import copilot_steer
+from backend.tests.unit.test_approval_service import session_factory as session_factory
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -2071,6 +2072,62 @@ class TestComplete:
         assert result.text == expected and result.raw_text == native_text
         assert result.response_normalization == ("single_json_code_fence" if normalized else None)
         assert result.model == "approved-model" and result.input_tokens == 7
+        sent.assert_awaited_once()
+
+    @pytest.mark.parametrize("native_text", [None, "", "   ", "too many bytes", "\u03bb" * 3])
+    async def test_completed_rejection_persists_bounded_usage_receipt(
+        self, adapter: CopilotAdapter, session_factory, native_text: str | None
+    ) -> None:
+        from backend.models.execution_contracts import ExecutionContractPin
+        from backend.persistence.event_repo import EventRepository
+        from backend.services.adapters.adapter_registry import AdapterRegistry
+        from backend.services.adapters.completion_context import CompletionContext, completion_context
+        from backend.tests.unit.test_execution_contracts import _contract
+
+        session = _FakeCopilotSession()
+        registry = AdapterRegistry(session_factory=session_factory)
+        pin = ExecutionContractPin(
+            job_id="job-1", admission_id="admission", budget_id="job-1", contract=_contract("pinned")
+        )
+
+        async def send_and_wait(*args: Any, **kwargs: Any) -> _FakeSdkSessionEvent:
+            session.fire_event(
+                _FakeSdkSessionEvent("assistant.usage", _FakeEventData(model="approved-model", inputTokens=7, cost=0.1))
+            )
+            return _FakeSdkSessionEvent("assistant.message", _FakeEventData(content=native_text))
+
+        with (
+            patch("copilot.CopilotClient", return_value=self._client(session)),
+            patch.object(registry, "_resolve_completion_adapter", return_value=adapter),
+            patch.object(
+                session, "send_and_wait", side_effect=send_and_wait, create=True, new_callable=AsyncMock
+            ) as sent,
+            completion_context(
+                CompletionContext(
+                    max_output_bytes=4,
+                    job_id="job-1",
+                    execution_epoch="epoch",
+                    execution_contract=pin,
+                    response_schema={"type": "object", "additionalProperties": False},
+                )
+            ),
+            pytest.raises(agent_adapter.UtilityCompletionError) as caught,
+        ):
+            await registry.get_completion_provider("copilot").complete("fixture", model="approved-model")
+        expected = "output_limit" if native_text and len(native_text.encode("utf-8")) > 4 else "empty_response"
+        assert caught.value.reason == expected
+        result = caught.value.completion
+        assert result is not None and result.input_tokens == 7
+        assert len(result.text.encode("utf-8")) <= 4
+        async with session_factory() as db_session:
+            events = [row.event for row in await EventRepository(db_session).list_after(0, job_id="job-1")]
+        assert [str(event.kind) for event in events] == [
+            "utility.completion.requested",
+            "utility.completion.completed",
+        ]
+        assert events[-1].id == result.usage_event_id
+        assert events[-1].payload["rejection_reason"] == expected
+        assert events[-1].payload["usage"] == [amount.model_dump(mode="json") for amount in result.usage]
         sent.assert_awaited_once()
 
     @pytest.mark.parametrize("actual_model", ["unexpected-model", ""])

@@ -949,6 +949,16 @@ class ClaudeAdapter(BaseAgentAdapter):
         collected_bytes = 0
         completed = False
 
+        def result_snapshot() -> CompletionResult:
+            return CompletionResult(
+                text="\n".join(collected),
+                input_tokens=sum(int(item.amount) for item in usage if item.unit == "input_tokens"),
+                output_tokens=sum(int(item.amount) for item in usage if item.unit == "output_tokens"),
+                cost_usd=sum(float(item.amount) for item in usage if item.unit == "USD"),
+                model=served_model,
+                usage=tuple(usage),
+            )
+
         def collect(text: str) -> None:
             nonlocal collected_bytes
             collected_bytes += len(text.encode("utf-8")) + (1 if collected else 0)
@@ -981,8 +991,6 @@ class ClaudeAdapter(BaseAgentAdapter):
                         if message.is_error:
                             raise UtilityCompletionError("Claude completion failed", reason="sdk_error")
                         result = getattr(message, "result", "")
-                        if result and result not in collected:
-                            collect(result)
                         # Capture usage/cost from the result message
                         raw_usage = getattr(message, "usage", {}) or {}
                         values = (
@@ -1015,6 +1023,8 @@ class ClaudeAdapter(BaseAgentAdapter):
                                     )
                                 )
                         completed = True
+                        if result and result not in collected:
+                            collect(result)
                         break
 
             async def _run_query() -> None:
@@ -1029,24 +1039,25 @@ class ClaudeAdapter(BaseAgentAdapter):
                     await close()
 
             await asyncio.wait_for(_run_query(), timeout=COMPLETION_TIMEOUT_S)
-        except UtilityCompletionError:
+        except UtilityCompletionError as exc:
+            if completed:
+                exc.completion = result_snapshot()
             raise
         except TimeoutError as exc:
             raise UtilityCompletionError("Claude completion timed out", reason="timeout") from exc
         except (OSError, RuntimeError, ValueError) as exc:
             raise UtilityCompletionError("Claude completion failed", reason="sdk_error") from exc
-        if tool_attempted:
-            raise UtilityCompletionError("Text-only completion requested tools", reason="tool_request")
-        if not completed or not "\n".join(collected).strip():
+        if not completed:
             raise UtilityCompletionError("Claude completion returned no complete text", reason="empty_response")
-        result = CompletionResult(
-            text="\n".join(collected),
-            input_tokens=sum(int(item.amount) for item in usage if item.unit == "input_tokens"),
-            output_tokens=sum(int(item.amount) for item in usage if item.unit == "output_tokens"),
-            cost_usd=sum(float(item.amount) for item in usage if item.unit == "USD"),
-            model=served_model,
-            usage=tuple(usage),
-        )
+        result = result_snapshot()
+        if tool_attempted:
+            raise UtilityCompletionError(
+                "Text-only completion requested tools", reason="tool_request", completion=result
+            )
+        if not result.text or not result.text.strip():
+            raise UtilityCompletionError(
+                "Claude completion returned no complete text", reason="empty_response", completion=result
+            )
         validate_completion_identity(model, served_model, completion, result=result)
         return result
 

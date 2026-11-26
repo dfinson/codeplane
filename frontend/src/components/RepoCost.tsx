@@ -7,6 +7,8 @@ import {
 } from "../api/client";
 import type { ModelComparisonRow, YieldCategoryRow } from "../api/client-analytics";
 import { Spinner } from "./ui/spinner";
+import { Tooltip } from "./ui/tooltip";
+import { CostEvidence } from "./CostEvidence";
 import { pathBasename } from "../lib/paths";
 import { sumKnown } from "../lib/currency";
 
@@ -41,9 +43,7 @@ export function RepoCost() {
         if (ignore) return;
         setModels(modelRes.models);
         setYieldData(yieldRes.categories);
-        setTotalCost(modelRes.models.some(m => m.totalCostUsd == null)
-          ? null
-          : sumKnown(modelRes.models.map(m => m.totalCostUsd)));
+        setTotalCost(sumKnown(modelRes.models.map(m => m.totalCostUsd)));
         setTotalJobs(modelRes.models.reduce((s, m) => s + (m.jobCount || 0), 0));
       })
       .catch(() => { if (!ignore) toast.error("Failed to load cost data"); })
@@ -91,7 +91,7 @@ export function RepoCost() {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="rounded-lg border border-border bg-card p-4 text-center">
               <p className="text-2xl font-bold text-foreground">{formatCost(totalCost)}</p>
-              <p className="text-xs text-muted-foreground">Total Cost ({period}d)</p>
+              <p className="text-xs text-muted-foreground">Verified USD subtotal ({period}d)</p>
             </div>
             <div className="rounded-lg border border-border bg-card p-4 text-center">
               <p className="text-2xl font-bold text-foreground">{totalJobs}</p>
@@ -101,9 +101,12 @@ export function RepoCost() {
               <p className="text-2xl font-bold text-foreground">
                 {totalJobs > 0 ? formatCost(totalCost == null ? null : totalCost / totalJobs) : "—"}
               </p>
-              <p className="text-xs text-muted-foreground">Avg Cost/Job</p>
+              <Tooltip content="Verified USD subtotal divided by all jobs, including jobs without USD evidence.">
+                <p className="text-xs text-muted-foreground cursor-help">Verified USD per job</p>
+              </Tooltip>
             </div>
           </div>
+          <CostEvidence />
 
           {/* Model comparison */}
           {models.length > 0 && (
@@ -119,8 +122,12 @@ export function RepoCost() {
                   <tr className="border-b border-border text-xs text-muted-foreground">
                     <th className="text-left px-4 py-2 font-medium">Model</th>
                     <th className="text-right px-4 py-2 font-medium">Jobs</th>
-                    <th className="text-right px-4 py-2 font-medium">Total Cost</th>
-                    <th className="text-right px-4 py-2 font-medium">Avg/Job</th>
+                    <th className="text-right px-4 py-2 font-medium">Verified USD subtotal</th>
+                    <th className="text-right px-4 py-2 font-medium">
+                      <Tooltip content="Average over jobs with verified USD evidence; jobs with unknown USD are excluded.">
+                        <span className="cursor-help">Average verified USD</span>
+                      </Tooltip>
+                    </th>
                     <th className="text-right px-4 py-2 font-medium">Requests</th>
                   </tr>
                 </thead>
