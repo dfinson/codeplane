@@ -143,7 +143,7 @@ async def test_concurrent_retry_observes_reservation_without_redelivery(session_
     entered, release = asyncio.Event(), asyncio.Event()
     target = live_session()
 
-    async def blocked_send(*args):
+    async def blocked_send(*args, **kwargs):
         entered.set()
         await release.wait()
 
@@ -240,6 +240,52 @@ async def test_recipient_change_during_account_validation_rejects_dispatch(sessi
     finally:
         release.set()
         receipt = await sending
+    assert receipt.status == "rejected"
+    assert (await service.messages("source")).items[0].status == "rejected"
+    sdk.send.assert_not_awaited()
+    runtime.publish_peer_note.assert_not_called()
+
+
+@pytest.mark.parametrize("transition", ["gated", "cancelling"])
+async def test_runtime_ineligible_during_account_validation_rejects_dispatch(session_factory, seed_job, transition):
+    await seed_job(job_id="source")
+    await seed_job(job_id="target")
+    adapter = CopilotAdapter(session_factory=session_factory)
+    sdk = MagicMock(send=AsyncMock())
+    adapter._sessions["sdk-target"] = sdk
+    adapter.set_job_id("sdk-target", "target")
+    target = live_session()
+    target._adapter = adapter
+    runtime = runtime_with(target)
+    execution = asyncio.create_task(asyncio.Event().wait())
+    runtime._tasks = {"target": execution}
+    runtime._active_gates = {}
+    runtime._agent_sessions = {"target": target}
+    runtime.current_peer_session.side_effect = lambda job_id: RuntimeService.current_peer_session(runtime, job_id)
+    entered, release = asyncio.Event(), asyncio.Event()
+    validate = adapter._validate_session_account
+
+    async def blocked_validation(session_id):
+        entered.set()
+        await release.wait()
+        await validate(session_id)
+
+    adapter._validate_session_account = blocked_validation
+    service = SessionCoordination(session_factory, runtime)
+    sending = asyncio.create_task(service.send("source", request(), origin="operator"))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        if transition == "gated":
+            runtime._active_gates["target"] = {"gate": "Waiting for review"}
+        else:
+            execution.cancel()
+        assert not target.tools_paused
+        assert "sdk-target" not in adapter._cleanup_tasks
+    finally:
+        release.set()
+        receipt = await sending
+        execution.cancel()
+        await asyncio.gather(execution, return_exceptions=True)
     assert receipt.status == "rejected"
     assert (await service.messages("source")).items[0].status == "rejected"
     sdk.send.assert_not_awaited()

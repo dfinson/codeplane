@@ -91,6 +91,26 @@ describe("SessionIdentityPanel", () => {
     await screen.findByText("sdk-new");
   });
 
+  it("preserves the reserved message ID when retrying an unknown delivery", async () => {
+    vi.mocked(relayPeerMessage).mockResolvedValue({
+      messageId: "receipt", senderJobId: "job-1", recipientJobId: "peer",
+      senderSessionId: null, recipientSessionId: "peer-sdk", origin: "operator",
+      content: "API ready", replyTo: null, status: "unknown",
+      detail: "Delivery could not be confirmed", createdAt: "2026-01-01",
+    });
+    await openPanel();
+    fireEvent.change(screen.getByLabelText("Recipient in this project"), { target: { value: "peer" } });
+    fireEvent.change(screen.getByLabelText("Note"), { target: { value: "API ready" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send peer note" }));
+    await screen.findByText(/unknown: Delivery could not be confirmed/);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send peer note" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Send peer note" }));
+    await waitFor(() => expect(relayPeerMessage).toHaveBeenCalledTimes(2));
+    const calls = vi.mocked(relayPeerMessage).mock.calls;
+    expect(calls[0]?.[1].messageId).toBeTruthy();
+    expect(calls[1]?.[1].messageId).toBe(calls[0]?.[1].messageId);
+  });
+
   it("does not carry a pending note or retry identity into another job", async () => {
     vi.mocked(relayPeerMessage).mockRejectedValue(new Error("Lost response"));
     const renderPanel = (current: Job) => <MemoryRouter><SessionIdentityPanel job={current} /></MemoryRouter>;

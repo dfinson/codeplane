@@ -1455,6 +1455,37 @@ class TestTfEventEmission:
 
 class TestExplicitInferenceAccount:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("credential_id", ["account-a", None])
+    async def test_async_error_payload_is_safe_for_explicit_and_inherited_accounts(self, adapter, credential_id):
+        with (
+            patch(
+                "backend.services.inference_account.resolve_inference_token", AsyncMock(return_value="selected-token")
+            ),
+            patch("copilot.CopilotClient", return_value=_FakeCopilotClient()),
+        ):
+            session_id = await adapter.create_session(_make_config(job_id="job-a", copilot_credential_id=credential_id))
+        sdk_session = adapter._sessions[session_id]
+        sdk_session.fire_event(
+            _FakeSdkSessionEvent(
+                "session.error",
+                _FakeEventData(
+                    message="Authentication failed: selected-token",
+                    stack="Bearer selected-token",
+                    url="https://example.invalid/?token=selected-token",
+                ),
+            )
+        )
+
+        async def collect():
+            return [event async for event in adapter.stream_events(session_id)]
+
+        events = await asyncio.wait_for(collect(), timeout=5)
+        failures = [event for event in events if event.kind == EventKind.job_failed]
+        assert len(failures) == 1
+        assert failures[0].payload == {"message": "Session failed for the selected Copilot credential"}
+        assert all("selected-token" not in event.model_dump_json() for event in events)
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(("resume", "fallback"), [(False, False), (True, False), (True, True)])
     async def test_primary_and_resume_fallback_keep_explicit_token(self, adapter, resume, fallback):
         client = _FakeCopilotClient()

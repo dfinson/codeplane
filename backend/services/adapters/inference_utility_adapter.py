@@ -44,8 +44,11 @@ class InferenceUtilityAdapter(AgentAdapterInterface):
         return session_id
 
     async def stream_events(self, session_id: str) -> AsyncIterator[SessionEvent]:
-        async for event in self._sessions[session_id].stream_events(session_id):
-            yield event
+        try:
+            async for event in self._sessions[session_id].stream_events(session_id):
+                yield event
+        finally:
+            await self.abort_session(session_id)
 
     async def send_message(self, session_id: str, message: str) -> None:
         await self._sessions[session_id].send_message(session_id, message)

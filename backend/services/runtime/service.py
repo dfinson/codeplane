@@ -85,7 +85,7 @@ from backend.services.runtime.verify import (
 from backend.validators import REF_PATTERN
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable
 
     from backend.services.action_policy.governance import GovernanceDecider
     from backend.services.events.event_processor import EventProcessor
@@ -143,10 +143,10 @@ class AgentSession:
         if self._adapter and self._session_id:
             await self._adapter.abort_session(self._session_id)
 
-    async def send_peer_message(self, message: str) -> None:
+    async def send_peer_message(self, message: str, *, can_send: Callable[[], bool] | None = None) -> None:
         if self.tools_paused or self._adapter is None or self._session_id is None:
             raise StateConflictError("Recipient is paused or has no live SDK session")
-        await self._adapter.send_peer_message(self._session_id, message)
+        await self._adapter.send_peer_message(self._session_id, message, can_send=can_send)
 
 
 class EventAction(enum.Enum):
@@ -2289,7 +2289,7 @@ class RuntimeService:
         if self.current_peer_session(job_id) is not target:
             raise StateConflictError("Recipient execution changed before dispatch")
         self._echo_suppress.setdefault(job_id, set()).add(message)
-        await target.send_peer_message(message)
+        await target.send_peer_message(message, can_send=lambda: self.current_peer_session(job_id) is target)
 
     async def publish_peer_note(self, event: SessionEvent) -> None:
         await self._event_bus.publish(event)

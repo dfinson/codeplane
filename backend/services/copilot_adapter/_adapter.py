@@ -26,7 +26,7 @@ from backend.services.auth.permission_policy import PermissionRequest as PolicyR
 from backend.services.copilot_adapter._client import create_copilot_client
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable
 
     from copilot import CopilotClient
     from copilot.generated.session_events import (
@@ -231,6 +231,8 @@ class CopilotAdapter(BaseAgentAdapter):
         requested_model: str,
         model_verified: list[bool],
         queue: asyncio.Queue[SessionEvent | None],
+        *,
+        explicit_account: bool = False,
     ) -> None:
         """Process a single SDK event: telemetry, enrichment, log emission, delivery.
 
@@ -246,6 +248,7 @@ class CopilotAdapter(BaseAgentAdapter):
                 requested_model,
                 model_verified,
                 queue,
+                explicit_account=explicit_account,
             )
         except Exception:
             log.warning(
@@ -264,6 +267,8 @@ class CopilotAdapter(BaseAgentAdapter):
         requested_model: str,
         model_verified: list[bool],
         queue: asyncio.Queue[SessionEvent | None],
+        *,
+        explicit_account: bool = False,
     ) -> None:
         """Inner implementation for SDK event processing (no exception guard)."""
         kind_str = sdk_event.type.value if sdk_event.type else ""
@@ -538,7 +543,13 @@ class CopilotAdapter(BaseAgentAdapter):
             with contextlib.suppress(asyncio.QueueFull):
                 queue.put_nowait(None)
         elif kind_str == "session.error":
-            err_payload = data.to_dict() if data and hasattr(data, "to_dict") else {}
+            err_payload = (
+                {"message": "Session failed for the selected Copilot credential"}
+                if explicit_account
+                else data.to_dict()
+                if data and hasattr(data, "to_dict")
+                else {}
+            )
             self._emit_tf(session_id, job_id, EventKind.job_failed, cast("dict[str, Any]", err_payload))
             with contextlib.suppress(asyncio.QueueFull):
                 queue.put_nowait(None)
@@ -710,6 +721,7 @@ class CopilotAdapter(BaseAgentAdapter):
                     requested_model,
                     _model_verified,
                     queue,
+                    explicit_account=bool(token),
                 ),
                 name=f"copilot-pipeline-{session_id[:8]}",
             )
@@ -775,7 +787,9 @@ class CopilotAdapter(BaseAgentAdapter):
         except (JsonRpcError, ProcessExitedError, ConnectionError):
             log.warning("copilot_send_message_failed", session_id=session_id, exc_info=True)
 
-    async def send_peer_message(self, session_id: str, message: str) -> None:
+    async def send_peer_message(
+        self, session_id: str, message: str, *, can_send: Callable[[], bool] | None = None
+    ) -> None:
         session = self._sessions.get(session_id)
         if session is None:
             raise StateConflictError("The target SDK session is no longer active")
@@ -786,6 +800,8 @@ class CopilotAdapter(BaseAgentAdapter):
             or session_id in self._cleanup_tasks
         ):
             raise StateConflictError("The target SDK session is no longer active or is paused")
+        if can_send is not None and not can_send():
+            raise StateConflictError("Recipient execution changed before dispatch")
         await session.send(message, mode="enqueue")
 
     async def interrupt_session(self, session_id: str) -> None:

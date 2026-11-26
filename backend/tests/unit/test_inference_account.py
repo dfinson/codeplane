@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import aclosing
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -12,6 +13,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from backend.config import CPLConfig
 from backend.models.db import Base
 from backend.models.domain import JobSpec, SessionConfig
+from backend.models.events import EventKind, new_event
 from backend.persistence.credential_repo import CredentialRepository
 from backend.persistence.job_repo import JobRepository
 from backend.persistence.project_repo import ProjectRepository
@@ -176,3 +178,60 @@ async def test_utility_uses_copilot_for_bound_job_even_when_global_sdk_is_claude
     await utility.complete("ambient")
     copilot.complete.assert_awaited_once()
     claude.complete.assert_awaited_once()
+
+
+@pytest.mark.parametrize("ending", ["complete", "error", "close"])
+async def test_utility_stream_releases_routing_and_aborts_once(accounts, ending):
+    event = new_event(session_id="helper", kind=EventKind.message_assistant, payload={"content": "Answer"})
+
+    async def events(session_id):
+        yield event
+        if ending == "error":
+            raise RuntimeError("Stream failed")
+        yield event
+
+    adapter = MagicMock(create_session=AsyncMock(return_value="helper"), abort_session=AsyncMock())
+    adapter.stream_events.side_effect = events
+    registry = MagicMock()
+    registry.get_adapter.return_value = adapter
+    utility = InferenceUtilityAdapter(registry, "copilot", accounts)
+    session_id = await utility.create_session(SessionConfig(workspace_path="/repo", prompt="Task"))
+    async with aclosing(utility.stream_events(session_id)) as stream:
+        assert await anext(stream) is event
+        if ending == "error":
+            with pytest.raises(RuntimeError, match="Stream failed"):
+                await anext(stream)
+        elif ending == "complete":
+            assert [item async for item in stream] == [event]
+    assert not utility._sessions
+    await utility.abort_session(session_id)
+    await utility.abort_session(session_id)
+    adapter.abort_session.assert_awaited_once_with(session_id)
+
+
+async def test_cancelled_utility_stream_releases_routing(accounts):
+    entered = asyncio.Event()
+
+    async def events(session_id):
+        entered.set()
+        await asyncio.Event().wait()
+        yield new_event(session_id=session_id, kind=EventKind.message_assistant, payload={})
+
+    adapter = MagicMock(create_session=AsyncMock(return_value="helper"), abort_session=AsyncMock())
+    adapter.stream_events.side_effect = events
+    registry = MagicMock()
+    registry.get_adapter.return_value = adapter
+    utility = InferenceUtilityAdapter(registry, "copilot", accounts)
+    session_id = await utility.create_session(SessionConfig(workspace_path="/repo", prompt="Task"))
+
+    async def consume():
+        async for _ in utility.stream_events(session_id):
+            pass
+
+    task = asyncio.create_task(consume())
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not utility._sessions
+    adapter.abort_session.assert_awaited_once_with(session_id)
