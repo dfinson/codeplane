@@ -6,20 +6,81 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from backend.config import CPLConfig
+from backend.models.domain import AgentSDK
 from backend.models.events import EventKind, new_event
 from backend.models.execution_contracts import ExecutionContractPin
 from backend.models.session_event import EventMetadata
 from backend.persistence.credential_repo import CredentialRepository
 from backend.persistence.event_repo import EventRepository
 from backend.services.action_policy.assessment import AssessmentService
+from backend.services.adapters.adapter_registry import AdapterRegistry
 from backend.services.adapters.agent_adapter import CompletionResult
 from backend.services.adapters.completion_context import CompletionContext, current_completion_context
+from backend.services.copilot_adapter import CopilotAdapter
 from backend.services.events.activity_projection import ActivityProjection
 from backend.services.events.event_bus import EventBus
 from backend.services.events.title_refinement import TitleRefinement, _Request, _Title
 from backend.tests.unit.test_approval_service import session_factory as session_factory
 from backend.tests.unit.test_execution_contracts import _contract
 from backend.tests.unit.test_inference_account import accounts as accounts
+
+
+async def test_title_deletion_during_registered_receipt_preserves_worker(accounts, monkeypatch):
+    config = CPLConfig()
+    config.runtime.utility_sdk = "claude"
+    config.runtime.copilot_only = False
+    registry = AdapterRegistry(session_factory=accounts, config=config)
+    copilot = CopilotAdapter(session_factory=accounts)
+    registry._adapters[AgentSDK.copilot] = copilot
+    original_complete = copilot.complete
+    original_record = registry.record_utility_receipt
+    delegated = []
+
+    async def complete(*args, **kwargs):
+        job_id = current_completion_context().job_id
+        delegated.append(job_id)
+        if job_id == "job-a":
+            return await original_complete(*args, **kwargs)
+        return CompletionResult(text='{"title":"Inspect native execution ownership"}', model="test-model")
+
+    async def record(operation_id, phase, context, payload):
+        receipt_id = await original_record(operation_id, phase, context, payload)
+        if phase == "requested" and context.job_id == "job-a":
+            async with accounts() as session:
+                await CredentialRepository(session).delete("a")
+                await session.commit()
+        return receipt_id
+
+    monkeypatch.setattr(copilot, "complete", complete)
+    monkeypatch.setattr(registry, "record_utility_receipt", record)
+    client_factory = MagicMock(side_effect=AssertionError("Deleted credentials must not start native inference"))
+    monkeypatch.setattr("backend.services.copilot_adapter._adapter.create_copilot_client", client_factory)
+    host = SimpleNamespace(
+        _event_bus=EventBus(),
+        _session_factory=accounts,
+        _adapter_registry=registry,
+        _config=config,
+        execution_epoch="epoch",
+    )
+    assessments = AssessmentService()
+    titles = TitleRefinement(host, assessments)
+    titles.start()
+    try:
+        for job_id in ("job-a", "job-b"):
+            pin = ExecutionContractPin(job_id=job_id, admission_id="run", budget_id=job_id, contract=_contract("test"))
+            event = new_event(job_id, EventKind.turn_summary, {"activity_id": "activity"})
+            titles._queue.put_nowait(_Request(event, pin, "Title this activity"))
+        await asyncio.wait_for(titles._queue.join(), 5)
+        assert delegated == ["job-a", "job-b"]
+        assert not titles._task.done()
+        client_factory.assert_not_called()
+        async with accounts() as session:
+            for job_id, expected_titles in (("job-a", 0), ("job-b", 1)):
+                records = await EventRepository(session).list_after(0, job_id=job_id)
+                assert sum(record.event.kind == EventKind.turn_summary for record in records) == expected_titles
+    finally:
+        await titles.close()
+        await assessments.shutdown()
 
 
 async def test_title_account_deletion_fails_closed_and_worker_processes_next_account(accounts):

@@ -73,12 +73,12 @@ class InferenceUtilityAdapter(AgentAdapterInterface):
 
         try:
             token = await resolve_inference_token(self._session_factory, job_id=current_completion_context().job_id)
+            provider = self._registry.get_completion_provider("copilot" if token else self._utility_sdk)
+            return await provider.complete(
+                prompt, model=model, system_message=system_message, excluded_tools=excluded_tools
+            )
         except InferenceAccountError as exc:
             raise UtilityCompletionError(str(exc), reason="inference_account_unavailable") from None
-        provider = self._registry.get_completion_provider("copilot" if token else self._utility_sdk)
-        return await provider.complete(
-            prompt, model=model, system_message=system_message, excluded_tools=excluded_tools
-        )
 
     def set_policy_router(self, *args: Any, **kwargs: Any) -> None:
         for sdk in {self._default_sdk, "copilot"}:

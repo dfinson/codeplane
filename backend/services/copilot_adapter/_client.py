@@ -27,7 +27,8 @@ class _TeardownDiagnosticFilter(logging.Filter):
         return True
 
 
-logging.getLogger("copilot.client").addFilter(_TeardownDiagnosticFilter())
+for _sdk_logger in ("copilot.client", "copilot._jsonrpc"):
+    logging.getLogger(_sdk_logger).addFilter(_TeardownDiagnosticFilter())
 
 
 def create_copilot_client(*, github_token: str | None = None) -> CopilotClient:

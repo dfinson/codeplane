@@ -35,9 +35,10 @@ def test_real_sdk_teardown_sanitizes_explicit_diagnostics_without_hiding_concurr
         import logging
         import sys
         import structlog
-        from types import SimpleNamespace
-        from unittest.mock import AsyncMock, Mock
+        from unittest.mock import AsyncMock
         from copilot import CopilotClient, RuntimeConnection
+        from copilot.session import CopilotSession
+        from copilot._jsonrpc import JsonRpcClient, JsonRpcError
         from backend.services.copilot_adapter._client import stop_copilot_client
 
         def offline(event, arguments):
@@ -54,22 +55,22 @@ def test_real_sdk_teardown_sanitizes_explicit_diagnostics_without_hiding_concurr
             async def stop(explicit):
                 marker = "explicit-fake-token-sentinel" if explicit else "ambient-error-sentinel"
                 client = CopilotClient(connection=RuntimeConnection.for_stdio(path=sys.executable))
-                session = SimpleNamespace(
-                    session_id="offline",
-                    disconnect=AsyncMock(side_effect=RuntimeError(marker)),
-                    _mark_disconnected=Mock(),
-                )
+                rpc = JsonRpcClient(None)
+                rpc._loop = asyncio.get_running_loop()
+                rpc._send_message = AsyncMock(side_effect=JsonRpcError(-32603, marker))
+                session = CopilotSession("offline", rpc)
                 client._sessions["offline"] = session
                 await stop_copilot_client(client, timeout=1, explicit_account=explicit)
-                session.disconnect.assert_awaited_once()
-                session._mark_disconnected.assert_called_once()
+                rpc._send_message.assert_awaited_once()
+                assert session._destroyed
             await asyncio.gather(stop(True), stop(False))
             text = output.getvalue()
             assert "explicit-fake-token-sentinel" not in text, text
             assert "diagnostic withheld for explicit inference account" in text, text
             assert "ambient-error-sentinel" in text, text
-            logging.getLogger("copilot.client").debug("after-teardown-sentinel")
-            assert "after-teardown-sentinel" in output.getvalue()
+            for name in ("copilot.client", "copilot._jsonrpc"):
+                logging.getLogger(name).debug(f"after-teardown-sentinel-{name}")
+                assert f"after-teardown-sentinel-{name}" in output.getvalue()
 
         with asyncio.Runner() as runner:
             runner.get_loop()
