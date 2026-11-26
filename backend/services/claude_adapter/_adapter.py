@@ -1044,9 +1044,17 @@ class ClaudeAdapter(BaseAgentAdapter):
                 exc.completion = result_snapshot()
             raise
         except TimeoutError as exc:
-            raise UtilityCompletionError("Claude completion timed out", reason="timeout") from exc
+            raise UtilityCompletionError(
+                "Claude completion timed out",
+                reason="timeout",
+                completion=result_snapshot() if completed else None,
+            ) from exc
         except (OSError, RuntimeError, ValueError) as exc:
-            raise UtilityCompletionError("Claude completion failed", reason="sdk_error") from exc
+            raise UtilityCompletionError(
+                "Claude completion failed",
+                reason="sdk_error",
+                completion=result_snapshot() if completed else None,
+            ) from exc
         if not completed:
             raise UtilityCompletionError("Claude completion returned no complete text", reason="empty_response")
         result = result_snapshot()

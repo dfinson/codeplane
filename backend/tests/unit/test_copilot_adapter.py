@@ -2074,6 +2074,76 @@ class TestComplete:
         assert result.model == "approved-model" and result.input_tokens == 7
         sent.assert_awaited_once()
 
+    @pytest.mark.parametrize("native_text", ["{}", "too many bytes", None])
+    async def test_cleanup_failure_retains_only_completed_usage(
+        self, adapter: CopilotAdapter, session_factory, native_text: str | None
+    ) -> None:
+        from backend.models.execution_contracts import ExecutionContractPin
+        from backend.persistence.event_repo import EventRepository
+        from backend.services.adapters.adapter_registry import AdapterRegistry
+        from backend.services.adapters.completion_context import CompletionContext, completion_context
+        from backend.tests.unit.test_execution_contracts import _contract
+
+        session = _FakeCopilotSession()
+        client = self._client(session)
+        client.stop = AsyncMock(side_effect=OSError("graceful stop failed"))
+        client.force_stop = AsyncMock(side_effect=OSError("forced stop failed"))
+        registry = AdapterRegistry(session_factory=session_factory)
+        pin = ExecutionContractPin(
+            job_id="job-1", admission_id="admission", budget_id="job-1", contract=_contract("pinned")
+        )
+
+        async def send_and_wait(*args: Any, **kwargs: Any) -> _FakeSdkSessionEvent:
+            session.fire_event(
+                _FakeSdkSessionEvent("assistant.usage", _FakeEventData(model="approved-model", inputTokens=7, cost=0.1))
+            )
+            if native_text is None:
+                raise OSError("incomplete inference")
+            return _FakeSdkSessionEvent("assistant.message", _FakeEventData(content=native_text))
+
+        with (
+            patch("copilot.CopilotClient", return_value=client),
+            patch.object(registry, "_resolve_completion_adapter", return_value=adapter),
+            patch.object(
+                session, "send_and_wait", side_effect=send_and_wait, create=True, new_callable=AsyncMock
+            ) as sent,
+            completion_context(
+                CompletionContext(
+                    max_output_bytes=4,
+                    job_id="job-1",
+                    execution_epoch="epoch",
+                    execution_contract=pin,
+                    response_schema={"type": "object", "additionalProperties": False},
+                )
+            ),
+            pytest.raises(agent_adapter.UtilityCompletionError) as caught,
+        ):
+            await registry.get_completion_provider("copilot").complete("fixture", model="approved-model")
+
+        assert caught.value.reason == "cleanup_failed"
+        assert isinstance(caught.value.__cause__, OSError)
+        client.stop.assert_awaited_once()
+        client.force_stop.assert_awaited_once()
+        assert client in adapter._clients.values()
+        client.stop = AsyncMock()
+        await adapter.shutdown()
+        assert not adapter._clients
+        async with session_factory() as db_session:
+            events = [row.event for row in await EventRepository(db_session).list_after(0, job_id="job-1")]
+        kinds = ["utility.completion.requested"]
+        result = caught.value.completion
+        if native_text is None:
+            assert result is None
+        else:
+            kinds.append("utility.completion.completed")
+            assert result is not None and result.input_tokens == 7
+            assert len(result.text.encode("utf-8")) <= 4
+            assert events[-1].id == result.usage_event_id
+            assert events[-1].payload["rejection_reason"] == "cleanup_failed"
+            assert events[-1].payload["usage"] == [amount.model_dump(mode="json") for amount in result.usage]
+        assert [str(event.kind) for event in events] == kinds
+        sent.assert_awaited_once()
+
     @pytest.mark.parametrize("native_text", [None, "", "   ", "too many bytes", "\u03bb" * 3])
     async def test_completed_rejection_persists_bounded_usage_receipt(
         self, adapter: CopilotAdapter, session_factory, native_text: str | None

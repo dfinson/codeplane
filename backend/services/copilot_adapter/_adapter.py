@@ -1052,6 +1052,7 @@ class CopilotAdapter(BaseAgentAdapter):
         usage: list[UsageAmount] = []
         served_model = ""
         collected_bytes = 0
+        result: CompletionResult | None = None
         try:
             import tempfile
 
@@ -1279,6 +1280,10 @@ class CopilotAdapter(BaseAgentAdapter):
             finally:
                 try:
                     await self._finish_session(tmp_session_id)
+                except Exception as exc:
+                    raise UtilityCompletionError(
+                        "Text-only completion cleanup failed", reason="cleanup_failed", completion=result
+                    ) from exc
                 finally:
                     if owner is not None:
                         self._opening_tasks.discard(owner)

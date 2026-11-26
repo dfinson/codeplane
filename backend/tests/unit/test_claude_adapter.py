@@ -1417,6 +1417,68 @@ class TestAbortSession:
 
 
 class TestComplete:
+    @pytest.mark.parametrize(
+        ("native_text", "cleanup_timeout"),
+        [("ok", False), ("too many bytes", False), ("ok", True), (None, False), (None, True)],
+    )
+    async def test_cleanup_failure_retains_only_completed_usage(
+        self, adapter: ClaudeAdapter, session_factory, native_text: str | None, cleanup_timeout: bool
+    ) -> None:
+        from backend.models.execution_contracts import ExecutionContractPin
+        from backend.persistence.event_repo import EventRepository
+        from backend.services.adapters.adapter_registry import AdapterRegistry
+        from backend.services.adapters.agent_adapter import UtilityCompletionError
+        from backend.services.adapters.completion_context import CompletionContext, completion_context
+        from backend.tests.unit.test_execution_contracts import _contract
+
+        registry = AdapterRegistry(session_factory=session_factory)
+        pin = ExecutionContractPin(
+            job_id="job-1", admission_id="admission", budget_id="job-1", contract=_contract("pinned")
+        )
+        calls = 0
+
+        async def query(**kwargs: Any):
+            nonlocal calls
+            calls += 1
+            try:
+                yield _FakeAssistantMessage(content=[], model="claude-approved")
+                if native_text is not None:
+                    yield _FakeResultMessage(result=native_text, usage={"input_tokens": 7}, total_cost_usd=0.1)
+            finally:
+                if cleanup_timeout:
+                    await asyncio.get_running_loop().create_future()
+                raise OSError("stream cleanup failed")
+
+        with (
+            patch.dict(sys.modules["claude_code_sdk"].__dict__, {"query": query}),
+            patch("backend.services.claude_adapter._adapter.COMPLETION_TIMEOUT_S", 0.05),
+            patch.object(registry, "_resolve_completion_adapter", return_value=adapter),
+            completion_context(
+                CompletionContext(max_output_bytes=4, job_id="job-1", execution_epoch="epoch", execution_contract=pin)
+            ),
+            pytest.raises(UtilityCompletionError) as caught,
+        ):
+            await registry.get_completion_provider("claude").complete("fixture", model="claude-approved")
+
+        expected = "timeout" if cleanup_timeout else "sdk_error"
+        assert caught.value.reason == expected
+        assert isinstance(caught.value.__cause__, TimeoutError if cleanup_timeout else OSError)
+        async with session_factory() as db_session:
+            events = [row.event for row in await EventRepository(db_session).list_after(0, job_id="job-1")]
+        kinds = ["utility.completion.requested"]
+        result = caught.value.completion
+        if native_text is None:
+            assert result is None
+        else:
+            kinds.append("utility.completion.completed")
+            assert result is not None and result.input_tokens == 7 and result.cost_usd == 0.1
+            assert len(result.text.encode("utf-8")) <= 4
+            assert events[-1].id == result.usage_event_id
+            assert events[-1].payload["rejection_reason"] == expected
+            assert events[-1].payload["usage"] == [amount.model_dump(mode="json") for amount in result.usage]
+        assert [str(event.kind) for event in events] == kinds
+        assert calls == 1
+
     @pytest.mark.parametrize("native_text", ["", "   ", "too many bytes", "\u03bb" * 3])
     async def test_completed_rejection_persists_bounded_usage_receipt(
         self, adapter: ClaudeAdapter, session_factory, native_text: str
