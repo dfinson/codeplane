@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import ctypes
+import json
+import os
+import runpy
 import subprocess
 import sys
 from ctypes import wintypes
@@ -128,6 +131,20 @@ class WindowsCommandJob:
         options = ["--inherit-stdin"] if inherit_stdin else []
         return [interpreter, "-I", "-S", str(Path(__file__).resolve()), self.name, *options, *argv]
 
+    def launch_python_module(self, module: str) -> list[str]:
+        interpreter = getattr(sys, "_base_executable", sys.executable)
+        python_path = [entry for entry in os.environ.get("PYTHONPATH", "").split(os.pathsep) if entry]
+        return [
+            interpreter,
+            "-I",
+            "-S",
+            str(Path(__file__).resolve()),
+            self.name,
+            "--python-module",
+            json.dumps([*python_path, *sys.path]),
+            module,
+        ]
+
     def terminate(self) -> None:
         _require(self._kernel.TerminateJobObject(self._handle, 1), "TerminateJobObject")
 
@@ -158,6 +175,16 @@ def _run_enrolled(argv: list[str]) -> int:
     _require(job, "OpenJobObjectW")
     try:
         _require(kernel.AssignProcessToJobObject(job, kernel.GetCurrentProcess()), "AssignProcessToJobObject")
+        if argv[1] == "--python-module":
+            # Run inside the enrolled process, not a venv redirector's child.
+            # The caller can then wait on the actual worker's process handle.
+            sys.path[:] = json.loads(argv[2])
+            sys.argv = [argv[3]]
+            import site
+
+            site.execsitecustomize()
+            runpy.run_module(argv[3], run_name="__main__")
+            return 0
         return subprocess.call(command, stdin=None if inherit_stdin else subprocess.DEVNULL)
     finally:
         _require(kernel.CloseHandle(job), "CloseHandle")

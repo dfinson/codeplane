@@ -21,7 +21,7 @@ async def count_tokens(texts: list[str]) -> list[int]:
         from backend.services.recipe.windows_process import WindowsCommandJob
 
         windows_job = WindowsCommandJob()
-        argv = windows_job.launch_argv(argv, inherit_stdin=True)
+        argv = windows_job.launch_python_module("backend.services.story.tokenizer")
     spawning = asyncio.create_task(
         asyncio.create_subprocess_exec(
             *argv,

@@ -95,7 +95,9 @@ async def test_story_worker_checks_owned_windows_descendants_after_launcher_exit
     monkeypatch.setattr(tokenizer, "sys", SimpleNamespace(platform="win32", executable=sys.executable))
     monkeypatch.setattr(tokenizer.asyncio, "create_subprocess_exec", spawn)
     assert await tokenizer.count_tokens(["abc"]) == [3]
-    assert "--inherit-stdin" in spawn.call_args.args
+    assert "--python-module" in spawn.call_args.args
+    assert spawn.call_args.args[-1] == "backend.services.story.tokenizer"
+    assert spawn.call_args.kwargs["stdin"] == asyncio.subprocess.PIPE
     assert order == ["terminate owned tree", "active=1", "active=0"]
     process.kill.assert_not_called()
     kernel.CloseHandle.assert_called_once_with(101)

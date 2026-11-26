@@ -215,16 +215,17 @@ async def test_large_records_use_bounded_raw_reads_per_poll(tmp_path, monkeypatc
             return super().read(size)
 
     opened: list[CountingFile] = []
-    original_open = type(path).open
+    from backend.services.ingest import jsonl_source
 
-    def instrumented_open(file_path, mode="r", buffering=-1, *args, **kwargs):
-        if file_path == path and mode == "rb" and buffering == 0:
-            stream = CountingFile(file_path, mode)
-            opened.append(stream)
-            return stream
-        return original_open(file_path, mode, buffering, *args, **kwargs)
+    original_open = jsonl_source._open_observed_file
 
-    monkeypatch.setattr(type(path), "open", instrumented_open)
+    def instrumented_open(file_path):
+        with original_open(file_path) as original:
+            stream = CountingFile(os.dup(original.fileno()), "rb")
+        opened.append(stream)
+        return stream
+
+    monkeypatch.setattr(jsonl_source, "_open_observed_file", instrumented_open)
     async with NativeJsonlSource(path) as source:
         stream = opened[0]
         for poll in range(1 if complete else 2):

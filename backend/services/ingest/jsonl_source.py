@@ -5,12 +5,49 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import sys
 from typing import TYPE_CHECKING, Any, BinaryIO
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 MAX_RECORD_BYTES = 1024 * 1024
+
+
+def _open_observed_file(path: Path) -> BinaryIO:
+    if sys.platform != "win32":
+        return path.open("rb", buffering=0)
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    # Read-only observation must not prevent the producer from rotating its file.
+    handle = kernel.CreateFileW(str(path), 0x80000000, 0x7, None, 3, 0x80, None)
+    if handle == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+    except BaseException:
+        kernel.CloseHandle(handle)
+        raise
+    try:
+        return os.fdopen(descriptor, "rb", buffering=0)
+    except BaseException:
+        os.close(descriptor)
+        raise
 
 
 class NativeJsonlSource:
@@ -35,7 +72,7 @@ class NativeJsonlSource:
     def _open(self) -> None:
         # Integrity checks must not reuse BufferedReader read-ahead after a
         # same-length in-place rewrite.
-        self._file = self.path.open("rb", buffering=0)
+        self._file = _open_observed_file(self.path)
         try:
             stat = os.fstat(self._file.fileno())
             self._identity = (stat.st_dev, stat.st_ino)

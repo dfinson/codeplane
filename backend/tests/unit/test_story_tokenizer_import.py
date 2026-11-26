@@ -96,6 +96,8 @@ def blocked_tokenizer(tmp_path, monkeypatch, record_property):
     _get_tokenizer.cache_clear()
     if sys.platform == "win32" and launched:
         assert job_activity and job_activity[-1]["active"] == 0
+        if identity_path.exists():
+            assert json.loads(identity_path.read_text())["pid"] in {process.pid for process, _ in launched}
 
 
 async def test_populated_story_drain_does_not_stall_http_or_shutdown(session_factory, blocked_tokenizer):
