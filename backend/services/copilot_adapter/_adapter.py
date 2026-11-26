@@ -84,6 +84,25 @@ def _sdk_excluded_tools(tools: list[str] | None) -> list[str] | None:
     return tools
 
 
+_CREDENTIAL_STATUS_CODES = frozenset({401, 402, 403, 429})
+_CREDENTIAL_REMEDIATIONS = frozenset({"sign_in", "switch_account", "show_account"})
+_CREDENTIAL_ERROR_MARKERS = ("auth", "quota", "rate_limit", "billing", "entitlement", "forbidden", "unauthorized")
+
+
+def _is_credential_error(data: object) -> bool:
+    """Whether an SDK session error is attributable to the inference credential."""
+    if data is None:
+        return False
+    if getattr(data, "status_code", None) in _CREDENTIAL_STATUS_CODES:
+        return True
+    remediation = getattr(data, "remediation", None)
+    if getattr(remediation, "value", remediation) in _CREDENTIAL_REMEDIATIONS:
+        return True
+    fields = ("error_type", "error_code", "provider_error_type", "provider_error_code", "message")
+    text = " ".join(str(value).lower() for name in fields if (value := getattr(data, name, None)))
+    return any(marker in text for marker in _CREDENTIAL_ERROR_MARKERS)
+
+
 def _structured_reply_text(text: str) -> tuple[str, bool]:
     envelope = re.fullmatch(r"```json\r?\n(.*?)\r?\n```(?:\r?\n)?", text, flags=re.DOTALL)
     if envelope is not None and text.count("```") != 2:
@@ -131,6 +150,10 @@ class CopilotAdapter(BaseAgentAdapter):
         self._session_credentials: dict[str, str | None] = {}
         self._explicit_account_sessions: set[str] = set()
         self._peer_echo_suppress: dict[str, set[str]] = {}
+        # Sessions whose latest turn ended with a visible answer, and sessions
+        # processing a queued follow-up (peer or operator note) after such an answer.
+        self._answered_sessions: set[str] = set()
+        self._followup_sessions: set[str] = set()
         self._callback_tasks: dict[str, set[asyncio.Task[None]]] = {}
         self._stop_tasks: dict[str, asyncio.Task[None]] = {}
         self._opening_tasks: set[asyncio.Task[Any]] = set()
@@ -179,6 +202,8 @@ class CopilotAdapter(BaseAgentAdapter):
         self._session_credentials.pop(session_id, None)
         self._explicit_account_sessions.discard(session_id)
         self._peer_echo_suppress.pop(session_id, None)
+        self._answered_sessions.discard(session_id)
+        self._followup_sessions.discard(session_id)
         job_id = self._session_to_job.get(session_id)
         last_for_job = not any(sid != session_id and jid == job_id for sid, jid in self._session_to_job.items())
         if job_id and last_for_job:
@@ -399,6 +424,12 @@ class CopilotAdapter(BaseAgentAdapter):
             content = (am.content or "") if am else ""
             is_scout = self.get_session_kind(session_id) == "preflight"
             has_tool_requests = bool(getattr(am, "tool_requests", None))
+            if content.strip() and not has_tool_requests:
+                self._answered_sessions.add(session_id)
+                self._followup_sessions.discard(session_id)
+            elif content.strip() or has_tool_requests:
+                self._answered_sessions.discard(session_id)
+                self._followup_sessions.discard(session_id)
             if content.strip() or is_scout or has_tool_requests:
                 title = getattr(am, "title", None) if am else None
                 payload: dict[str, Any] = {"content": content}
@@ -431,6 +462,9 @@ class CopilotAdapter(BaseAgentAdapter):
         elif kind_str == "user.message":
             um = cast("UserMessageData", data) if data else None
             content = (um.content or "") if um else ""
+            if session_id in self._answered_sessions:
+                self._answered_sessions.discard(session_id)
+                self._followup_sessions.add(session_id)
             peer_echoes = self._peer_echo_suppress.get(session_id)
             if peer_echoes is not None and content in peer_echoes:
                 peer_echoes.remove(content)
@@ -689,14 +723,29 @@ class CopilotAdapter(BaseAgentAdapter):
                 queue.put_nowait(None)
         elif kind_str == "session.error":
             self._accepting_events.discard(session_id)
-            err_payload = (
-                {"message": "Session failed for the selected Copilot credential"}
-                if explicit_account
-                else data.to_dict()
-                if data and hasattr(data, "to_dict")
-                else {}
-            )
-            self._emit_tf(session_id, job_id, EventKind.job_failed, cast("dict[str, Any]", err_payload))
+            credential_error = _is_credential_error(data)
+            error_type = str(getattr(data, "error_type", "") or "")
+            in_followup = session_id in self._followup_sessions
+            self._followup_sessions.discard(session_id)
+            self._answered_sessions.discard(session_id)
+            if in_followup and error_type == "query" and not credential_error:
+                # A queued follow-up after a completed answer produced no visible output.
+                # The CLI reports that as a query error, but the job's result stands.
+                log.warning("copilot_followup_without_response", session_id=session_id, job_id=job_id)
+                self._emit_log_line(
+                    session_id, job_id, "Follow-up turn ended without a response; keeping the completed result", "warn"
+                )
+            else:
+                err_payload: dict[str, Any]
+                if not explicit_account:
+                    err_payload = data.to_dict() if data and hasattr(data, "to_dict") else {}
+                elif credential_error:
+                    err_payload = {"message": "Session failed for the selected Copilot credential"}
+                else:
+                    err_payload = {"message": "Copilot session failed"}
+                    if error_type:
+                        err_payload["error_type"] = error_type
+                self._emit_tf(session_id, job_id, EventKind.job_failed, err_payload)
             with contextlib.suppress(asyncio.QueueFull):
                 queue.put_nowait(None)
 

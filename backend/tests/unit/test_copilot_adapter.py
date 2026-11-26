@@ -1164,7 +1164,33 @@ class TestOnEventCallback:
         assert None in all_items
 
     @pytest.mark.asyncio
-    async def test_session_idle_emits_done(self, adapter: CopilotAdapter) -> None:
+    @pytest.mark.parametrize(
+        ("answered", "error_kwargs", "fails"),
+        [
+            (True, {"error_type": "query"}, False),
+            (False, {"error_type": "query"}, True),
+            (True, {"error_type": "query", "status_code": 402}, True),
+            (True, {"error_type": "server"}, True),
+        ],
+    )
+    async def test_followup_without_response_keeps_completed_answer(
+        self, adapter: CopilotAdapter, answered: bool, error_kwargs: dict[str, Any], fails: bool
+    ) -> None:
+        sid, queue, session = await self._setup_session(adapter)
+        if answered:
+            await self._fire(session, _FakeSdkSessionEvent("assistant.message", _FakeEventData(content="Summary")))
+            await self._fire(session, _FakeSdkSessionEvent("user.message", _FakeEventData(content="Peer note")))
+        await self._fire(session, _FakeSdkSessionEvent("assistant.message", _FakeEventData(content="")))
+        error = _FakeEventData(message="No response was returned. Send your message again to retry.", **error_kwargs)
+        await self._fire(session, _FakeSdkSessionEvent("session.error", error))
+
+        all_items = []
+        while not queue.empty():
+            all_items.append(queue.get_nowait())
+        failures = [e for e in all_items if e is not None and e.kind == EventKind.job_failed]
+        assert len(failures) == (1 if fails else 0)
+        assert None in all_items
+        assert sid not in adapter._followup_sessions
         sid, queue, session = await self._setup_session(adapter)
 
         data = _FakeEventData()
