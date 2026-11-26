@@ -281,9 +281,7 @@ class JobRepository(BaseRepository):
                 JobRow.sdk == "copilot",
                 JobRow.state == JobState.running,
             )
-        result = await self._session.execute(
-            stmt.order_by(JobRow.created_at, JobRow.id).offset(offset).limit(limit)
-        )
+        result = await self._session.execute(stmt.order_by(JobRow.created_at, JobRow.id).offset(offset).limit(limit))
         return [self._to_domain(row) for row in result.scalars()]
 
     async def list_all(

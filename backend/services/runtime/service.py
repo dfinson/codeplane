@@ -1810,17 +1810,17 @@ class RuntimeService:
                 receipt = await coordination.send(
                     job_id,
                     PeerMessageRequest(
-                        message_id=message_id, recipient_job_id=recipient_id,
-                        content=content, reply_to=reply_to,
+                        message_id=message_id,
+                        recipient_job_id=recipient_id,
+                        content=content,
+                        reply_to=reply_to,
                     ),
                     origin="agent",
                     sender_execution=agent_session,
                 )
                 return receipt.model_dump(mode="json", by_alias=True)
 
-            config = dataclass_replace(
-                config, peer_directory_handler=peer_directory, peer_message_handler=peer_message
-            )
+            config = dataclass_replace(config, peer_directory_handler=peer_directory, peer_message_handler=peer_message)
 
         async for session_event in agent_session.execute(config, self._resolve_adapter(config.sdk)):
             made_progress = made_progress or _session_event_counts_as_resume_progress(session_event)
