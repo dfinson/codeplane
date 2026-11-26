@@ -131,6 +131,8 @@ def _job_to_create_response(job: Job) -> CreateJobResponse:
         branch=job.branch,
         worktree_path=job.worktree_path,
         sdk=job.sdk,
+        copilot_credential_id=job.copilot_credential_id,
+        copilot_credential_label=job.copilot_credential_label,
         created_at=job.created_at,
     )
 
@@ -148,7 +150,9 @@ async def suggest_names(
     from backend.services.completers.naming_service import NamingError
 
     try:
-        title, description, branch_name, worktree_name = await naming_service.generate(body.prompt)
+        title, description, branch_name, worktree_name = await naming_service.generate(
+            body.prompt, copilot_credential_id=body.copilot_credential_id
+        )
     except NamingError as exc:
         log.warning("naming_failed", exc_info=exc)
         raise HTTPException(status_code=503, detail="Naming failed") from exc
@@ -195,6 +199,7 @@ async def create_job(
         preset=body.preset or Preset.supervised,
         model=body.model,
         sdk=body.sdk,
+        copilot_credential_id=body.copilot_credential_id,
         verify=body.verify,
         self_review=body.self_review,
         max_turns=body.max_turns,
@@ -435,14 +440,29 @@ async def resume_job(
 @router.get("/models", response_model=ModelListResponse)
 async def list_models(
     cached_models_by_sdk: FromDishka[CachedModelsBySdk],
+    session_factory: FromDishka[async_sessionmaker[AsyncSession]],
     sdk: str | None = Query(default=None, description="SDK id (copilot | claude). Omit for default."),
+    copilot_credential_id: str | None = Query(default=None, alias="copilotCredentialId", min_length=1),
 ) -> ModelListResponse:
     """Resolve enabled provider models on demand and cache successful discovery."""
     from backend.config import load_config
     from backend.services.adapters.integration_policy import IntegrationPolicy
 
     policy = IntegrationPolicy(load_config())
-    resolved_sdk = policy.require_enabled(sdk or policy.default_sdk).value
+    resolved_sdk = policy.require_enabled(sdk or ("copilot" if copilot_credential_id else policy.default_sdk)).value
+    if copilot_credential_id is not None:
+        from backend.services.copilot_adapter._models import fetch_copilot_models_raw
+        from backend.services.inference_account import InferenceAccountError, resolve_inference_token
+
+        if resolved_sdk != "copilot":
+            raise HTTPException(status_code=400, detail="Explicit inference accounts require Copilot")
+        # Never share the ambient cache or retain a revoked credential's catalogue.
+        token = await resolve_inference_token(session_factory, credential_id=copilot_credential_id)
+        try:
+            models = await fetch_copilot_models_raw(github_token=token)
+        except Exception:
+            raise InferenceAccountError("Model discovery failed for the selected Copilot credential") from None
+        return ModelListResponse(items=[ModelInfoResponse.model_validate(m) for m in models])
     models = cached_models_by_sdk.get(resolved_sdk, [])
     if not models and resolved_sdk == "copilot":
         try:

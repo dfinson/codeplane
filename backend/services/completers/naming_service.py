@@ -243,6 +243,25 @@ class NamingService:
         existing_branches: set[str] | None = None,
         existing_worktrees: set[str] | None = None,
         parent_job_context: str | None = None,
+        copilot_credential_id: str | None = None,
+    ) -> tuple[str, str, str, str]:
+        from backend.services.inference_account import inference_scope
+
+        with inference_scope(credential_id=copilot_credential_id):
+            return await self._generate(
+                prompt,
+                existing_branches=existing_branches,
+                existing_worktrees=existing_worktrees,
+                parent_job_context=parent_job_context,
+            )
+
+    async def _generate(
+        self,
+        prompt: str,
+        *,
+        existing_branches: set[str] | None = None,
+        existing_worktrees: set[str] | None = None,
+        parent_job_context: str | None = None,
     ) -> tuple[str, str, str, str]:
         """Generate a title, description, branch name, and worktree name.
 

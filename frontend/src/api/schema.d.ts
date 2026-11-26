@@ -273,14 +273,63 @@ export interface paths {
         };
         /**
          * List Models
-         * @description Return the model list for the requested SDK, cached at server startup.
-         *
-         *     If the cache is empty for the copilot SDK (e.g. auth wasn't ready at
-         *     startup), attempt a live fetch so the user doesn't have to restart.
+         * @description Resolve enabled provider models on demand and cache successful discovery.
          */
         get: operations["list_models_api_models_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/peer-agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Peer Agents */
+        get: operations["peer_agents_api_jobs__job_id__peer_agents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Session Directory */
+        get: operations["session_directory_api_jobs__job_id__sessions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/peer-messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Peer Messages */
+        get: operations["peer_messages_api_jobs__job_id__peer_messages_get"];
+        put?: never;
+        /** Relay Peer Message */
+        post: operations["relay_peer_message_api_jobs__job_id__peer_messages_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4324,7 +4373,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "github" | "jira" | "azure_devops" | "otlp";
+            provider: "github" | "jira" | "azure_devops" | "otlp" | "copilot";
             /** Label */
             label: string;
             /** Baseurl */
@@ -4359,6 +4408,8 @@ export interface components {
             model?: string | null;
             /** Sdk */
             sdk?: string | null;
+            /** Copilotcredentialid */
+            copilotCredentialId?: string | null;
             /** Verify */
             verify?: boolean | null;
             /** Selfreview */
@@ -4394,6 +4445,10 @@ export interface components {
              * @default copilot
              */
             sdk: string;
+            /** Copilotcredentialid */
+            copilotCredentialId?: string | null;
+            /** Copilotcredentiallabel */
+            copilotCredentialLabel?: string | null;
             /**
              * Createdat
              * Format: date-time
@@ -5514,6 +5569,10 @@ export interface components {
              * @default copilot
              */
             sdk: string;
+            /** Copilotcredentialid */
+            copilotCredentialId?: string | null;
+            /** Copilotcredentiallabel */
+            copilotCredentialLabel?: string | null;
             /** Worktreename */
             worktreeName?: string | null;
             /** Verify */
@@ -5539,6 +5598,13 @@ export interface components {
             source: string;
             /** Externalsessionid */
             externalSessionId?: string | null;
+            /** Sdksessionid */
+            sdkSessionId?: string | null;
+            /**
+             * Sessioncount
+             * @default 1
+             */
+            sessionCount: number;
             /** Integrationbindingid */
             integrationBindingId?: string | null;
             /**
@@ -6425,6 +6491,71 @@ export interface components {
             periodDays: number;
             /** Totalwasteusd */
             totalWasteUsd?: number | null;
+        };
+        /** PeerMessageListResponse */
+        PeerMessageListResponse: {
+            /** Items */
+            items?: components["schemas"]["PeerMessageResponse"][];
+            /**
+             * Hasmore
+             * @default false
+             */
+            hasMore: boolean;
+        };
+        /** PeerMessageRequest */
+        PeerMessageRequest: {
+            /** Messageid */
+            messageId: string;
+            /** Recipientjobid */
+            recipientJobId: string;
+            /** Content */
+            content: string;
+            /** Replyto */
+            replyTo?: string | null;
+            /** Recipientattemptid */
+            recipientAttemptId?: string | null;
+            /** Recipientexecutiontoken */
+            recipientExecutionToken?: string | null;
+        };
+        /** PeerMessageResponse */
+        PeerMessageResponse: {
+            /** Messageid */
+            messageId: string;
+            /** Senderjobid */
+            senderJobId: string;
+            /** Recipientjobid */
+            recipientJobId: string;
+            /** Sendersessionid */
+            senderSessionId: string | null;
+            /** Recipientsessionid */
+            recipientSessionId: string | null;
+            /** Recipientattemptid */
+            recipientAttemptId?: string | null;
+            /** Recipientexecutiontoken */
+            recipientExecutionToken?: string | null;
+            /** Senderattemptid */
+            senderAttemptId?: string | null;
+            /**
+             * Origin
+             * @enum {string}
+             */
+            origin: "agent" | "operator";
+            /** Content */
+            content: string;
+            /** Replyto */
+            replyTo: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "accepted" | "rejected" | "unknown";
+            /** Detail */
+            detail: string;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
         };
         /** PhaseSegment */
         PhaseSegment: {
@@ -7518,6 +7649,10 @@ export interface components {
              * @default copilot
              */
             sdk: string;
+            /** Copilotcredentialid */
+            copilotCredentialId?: string | null;
+            /** Copilotcredentiallabel */
+            copilotCredentialLabel?: string | null;
             /** Worktreename */
             worktreeName?: string | null;
             /** Verify */
@@ -7543,6 +7678,13 @@ export interface components {
             source: string;
             /** Externalsessionid */
             externalSessionId?: string | null;
+            /** Sdksessionid */
+            sdkSessionId?: string | null;
+            /**
+             * Sessioncount
+             * @default 1
+             */
+            sessionCount: number;
             /** Integrationbindingid */
             integrationBindingId?: string | null;
             /**
@@ -8505,6 +8647,71 @@ export interface components {
              */
             timestamp: string;
         };
+        /** SessionAgentCard */
+        SessionAgentCard: {
+            /** Agentid */
+            agentId: string;
+            /** Jobid */
+            jobId: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Sdk */
+            sdk: string;
+            /** Model */
+            model?: string | null;
+            /** State */
+            state: string;
+            /** Attemptid */
+            attemptId?: string | null;
+            /** Sessionid */
+            sessionId?: string | null;
+            /** Executiontoken */
+            executionToken?: string | null;
+            /** Acceptspeermessages */
+            acceptsPeerMessages: boolean;
+            /** Detail */
+            detail?: string | null;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+        };
+        /** SessionAgentDirectoryResponse */
+        SessionAgentDirectoryResponse: {
+            /** Jobid */
+            jobId: string;
+            /** Items */
+            items: components["schemas"]["SessionAgentCard"][];
+            /** Nextcursor */
+            nextCursor?: string | null;
+            /**
+             * Observedat
+             * Format: date-time
+             */
+            observedAt: string;
+        };
+        /** SessionDirectoryResponse */
+        SessionDirectoryResponse: {
+            job: components["schemas"]["JobResponse"];
+            parent?: components["schemas"]["JobResponse"] | null;
+            /** Children */
+            children?: components["schemas"]["JobResponse"][];
+            /**
+             * Childrenhasmore
+             * @default false
+             */
+            childrenHasMore: boolean;
+            /** Peers */
+            peers?: components["schemas"]["JobResponse"][];
+            /**
+             * Peershasmore
+             * @default false
+             */
+            peersHasMore: boolean;
+        };
         /** SettingsResponse */
         SettingsResponse: {
             /** Maxconcurrentjobs */
@@ -8839,6 +9046,8 @@ export interface components {
         };
         /** SuggestNamesRequest */
         SuggestNamesRequest: {
+            /** Copilotcredentialid */
+            copilotCredentialId?: string | null;
             /** Prompt */
             prompt: string;
             /** Repo */
@@ -10717,6 +10926,7 @@ export interface operations {
             query?: {
                 /** @description SDK id (copilot | claude). Omit for default. */
                 sdk?: string | null;
+                copilotCredentialId?: string | null;
             };
             header?: never;
             path?: never;
@@ -10731,6 +10941,141 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ModelListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    peer_agents_api_jobs__job_id__peer_agents_get: {
+        parameters: {
+            query: {
+                target_job_id: string;
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionAgentDirectoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_directory_api_jobs__job_id__sessions_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionDirectoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    peer_messages_api_jobs__job_id__peer_messages_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PeerMessageListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    relay_peer_message_api_jobs__job_id__peer_messages_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PeerMessageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PeerMessageResponse"];
                 };
             };
             /** @description Validation Error */

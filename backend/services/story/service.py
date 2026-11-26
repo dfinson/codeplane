@@ -1494,7 +1494,10 @@ class StoryService:
     ) -> list[StoryBlock]:
         """Execute one LLM call and parse the result into blocks."""
         try:
-            result = await self._completer.complete(full_prompt)
+            from backend.services.inference_account import inference_scope
+
+            with inference_scope(job_id=job_id):
+                result = await self._completer.complete(full_prompt)
             raw = result.strip() if isinstance(result, str) else str(result).strip()
         except (httpx.HTTPError, OSError, ValueError):
             log.warning("story_generation_llm_failed", job_id=job_id, exc_info=True)

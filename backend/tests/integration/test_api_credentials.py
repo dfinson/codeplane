@@ -41,7 +41,7 @@ class TestProviderGuidance:
         resp = await client.get("/api/settings/credentials/guidance")
         assert resp.status_code == 200
         guidance = resp.json()["guidance"]
-        assert set(guidance) == {"github", "jira", "azure_devops", "otlp"}
+        assert set(guidance) == {"github", "jira", "azure_devops", "otlp", "copilot"}
         for text in guidance.values():
             assert isinstance(text, str)
             assert text

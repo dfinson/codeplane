@@ -8,6 +8,9 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+    from contextlib import AbstractAsyncContextManager
+
     from backend.services.adapters.agent_adapter import AgentAdapterInterface
 
 
@@ -24,6 +27,19 @@ class AttemptBinding:
     sdk: str
     token: str
     cancel_requested: bool = False
+
+    @property
+    def execution_token(self) -> str:
+        return self.token
+
+    @property
+    def tools_paused(self) -> bool:
+        return self.cancel_requested
+
+    async def send_peer_message(
+        self, message: str, *, admission: Callable[[], AbstractAsyncContextManager[None]] | None = None
+    ) -> None:
+        await self.adapter.send_peer_message(self.session_id, message, admission=admission)
 
 
 @dataclass(frozen=True, slots=True)

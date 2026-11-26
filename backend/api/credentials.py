@@ -59,6 +59,12 @@ log = structlog.get_logger()
 # NFR9: per-provider PAT scope guidance, copy-paste only — never validated/enforced
 # against TrackerLinks, since a Credential is deliberately global and reusable.
 _PROVIDER_GUIDANCE: dict[str, str] = {
+    "copilot": (
+        "Use a GitHub token authorized for Copilot inference. Stored encrypted; never returned. "
+        "The label is not a verified billing identity. Selecting this credential applies to "
+        "managed Copilot jobs and their helpers only, not Git, gh, or tracker authentication. "
+        "A missing, revoked, or unauthorized selected credential fails without ambient fallback."
+    ),
     "otlp": (
         "Use only destination-scoped transport-auth headers as a JSON object. "
         "Choose the exact collector endpoint and protocol. The encrypted credential "
@@ -100,7 +106,7 @@ class CredentialListResponse(CamelModel):
 
 
 class CreateCredentialRequest(CamelModel):
-    provider: Literal["github", "jira", "azure_devops", "otlp"]
+    provider: Literal["github", "jira", "azure_devops", "otlp", "copilot"]
     label: str = Field(min_length=1)
     base_url: str = Field(min_length=1)
     pat: str = Field(min_length=1)

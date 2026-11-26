@@ -76,6 +76,8 @@ async def run_followup_turn(
         base_config,
         prompt=prompt,
         resume_sdk_session_id=resume_session_id,
+        peer_directory_handler=None,
+        peer_message_handler=None,
     )
 
     # Suppress echo of the follow-up prompt

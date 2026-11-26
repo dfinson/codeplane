@@ -90,7 +90,7 @@ class TrailEnricher:
 
                 prompt = build_enrichment_prompt(job_nodes, goal_intent, recent_decisions)
                 full_prompt = f"SYSTEM:\n{ENRICH_SYSTEM_PROMPT}\n\nUSER:\n{prompt}"
-                result = await self._sidecar_sessions.complete(full_prompt)
+                result = await self._sidecar_sessions.complete(full_prompt, job_id=job_id)
                 result_text = result if isinstance(result, str) else str(result)
 
                 enrichment_data = parse_enrichment_response(result_text)
@@ -281,7 +281,7 @@ class TrailEnricher:
                     prompt += f"\nFILE: {file_path}"
 
                 full_prompt = f"SYSTEM:\n{_SYSTEM_PROMPT}\n\nUSER:\n{prompt}"
-                result = await self._sidecar_sessions.complete(full_prompt)
+                result = await self._sidecar_sessions.complete(full_prompt, job_id=node.job_id)
                 summary = result if isinstance(result, str) else str(result)
                 summary = summary.strip()
 
@@ -359,7 +359,7 @@ class TrailEnricher:
                     file_level_summary=node.write_summary,
                 )
                 full_prompt = f"SYSTEM:\n{_EDIT_SYSTEM_PROMPT}\n\nUSER:\n{prompt}"
-                result = await self._sidecar_sessions.complete(full_prompt)
+                result = await self._sidecar_sessions.complete(full_prompt, job_id=node.job_id)
                 summary = result if isinstance(result, str) else str(result)
                 summary = summary.strip()
 

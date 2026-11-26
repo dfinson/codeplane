@@ -185,7 +185,10 @@ class SummarizationService:
 
         # --- Call LLM ---
         log.info("summarization_started", job_id=job_id, session=session_number)
-        raw = await self._adapter.complete(prompt, timeout=60)
+        from backend.services.inference_account import inference_scope
+
+        with inference_scope(job_id=job_id):
+            raw = await self._adapter.complete(prompt, timeout=60)
         summary_json = _extract_json(raw, job_id, original_task, session_number)
 
         # --- Write phase (serialized through global write lock) ---

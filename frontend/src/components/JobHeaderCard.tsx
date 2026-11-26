@@ -19,6 +19,7 @@ import { NavMenuSlideout } from "./NavMenuSlideout";
 import { BottomSheet } from "./ui/bottom-sheet";
 import { Tooltip } from "./ui/tooltip";
 import { isActiveSetupStep, setupStepLabel } from "../lib/utils";
+import { SessionIdentityPanel } from "./SessionIdentityPanel";
 
 /** States where the card should default to expanded (user needs context/actions). */
 const EXPAND_STATES = new Set(["review", "failed", "canceled", "completed"]);
@@ -305,6 +306,7 @@ export function JobHeaderCard({
           </div>
         )}
       </div>
+      <SessionIdentityPanel key={job.id} job={job} />
     </>
   );
 }

@@ -381,7 +381,7 @@ class StandaloneGovernance:
         from backend.services.action_policy.batcher import ApprovalBatcher
         from backend.services.action_policy.checkpoint_service import CheckpointService
         from backend.services.action_policy.monitor import MonitorSession, MonitorVerdict
-        from backend.services.adapters.agent_adapter import UtilityCompletionError
+        from backend.services.adapters.inference_utility_adapter import InferenceUtilityAdapter
         from backend.services.adapters.integration_policy import IntegrationPolicy
         from backend.services.completers.lightweight_completer import LightweightCompleter
 
@@ -390,19 +390,20 @@ class StandaloneGovernance:
             raise RuntimeError("Standalone Job policy requires its catalogue, durable approvals and Git service")
         if self.audit_error is not None or self.accounting_error is not None:
             raise StateConflictError(f"Governance requires reconciliation: {self.audit_error or self.accounting_error}")
-        provider = None
         host._execution_contracts.require_available(pin)
-        try:
-            provider = host._adapter_registry.get_completion_provider(host._config.runtime.utility_sdk)
-        except UtilityCompletionError as exc:
-            log.warning("policy_assessment_provider_unavailable", job_id=pin.job_id, reason=str(exc))
+        provider = InferenceUtilityAdapter(
+            host._adapter_registry,
+            host._config.runtime.default_sdk,
+            host._session_factory,
+            utility_sdk=host._config.runtime.utility_sdk,
+        )
 
         batcher = ApprovalBatcher(host._event_bus, policy.batch_window_seconds)
         host._policy_batchers[pin.job_id] = batcher
         monitors: dict[tuple[str, int, int], MonitorSession] = {}
 
         async def monitor(action: Action, classification: Classification) -> tuple[MonitorVerdict, str]:
-            if provider is None or not action.workspace_path:
+            if not action.workspace_path:
                 return MonitorVerdict.escalate, "Monitor provider or workspace is unavailable"
             try:
                 root = Path(action.workspace_path).resolve(strict=True)

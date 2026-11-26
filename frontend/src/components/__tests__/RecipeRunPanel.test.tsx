@@ -123,6 +123,7 @@ it("offers explicit same-run recovery without pretending it is a new revision or
     id: "job", repo: "/repo", prompt: "Original request", state: "failed", baseRef: "main",
     worktreePath: "/repo/work", branch: "work", createdAt: interrupted.createdAt,
     updatedAt: interrupted.updatedAt, completedAt: null,
+    sessionCount: 1,
   } } });
   render(<RecipeRunPanel jobId="job" />);
   fireEvent.click(await screen.findByText("Recover pinned run"));

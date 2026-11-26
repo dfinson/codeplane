@@ -40,6 +40,7 @@ function item(id: string, linked = false): ProjectBoardItem {
       title: "Linked work", state: "review", baseRef: "main", worktreePath: null, branch: null,
       createdAt: now, updatedAt: now, completedAt: null, sdk: "copilot", source: "managed", mode: "standard",
       observationOnly: false,
+      sessionCount: 1,
     } : null,
     recipe: linked ? {
       runId: "run-1", revision: 2, name: "Pinned recipe", state: "succeeded", reason: null,

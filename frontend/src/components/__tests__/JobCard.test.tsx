@@ -13,6 +13,7 @@ function makeJob(overrides: Partial<JobSummary> = {}): JobSummary {
     repo: "/home/user/repos/my-project",
     prompt: "Fix the authentication bug",
     state: "running",
+    sessionCount: 1,
     baseRef: "main",
     worktreePath: "/repos/test",
     branch: "fix/auth-bug",

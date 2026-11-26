@@ -6,18 +6,138 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from backend.config import CPLConfig
+from backend.models.domain import AgentSDK
 from backend.models.events import EventKind, new_event
 from backend.models.execution_contracts import ExecutionContractPin
 from backend.models.session_event import EventMetadata
+from backend.persistence.credential_repo import CredentialRepository
 from backend.persistence.event_repo import EventRepository
 from backend.services.action_policy.assessment import AssessmentService
+from backend.services.adapters.adapter_registry import AdapterRegistry
 from backend.services.adapters.agent_adapter import CompletionResult
 from backend.services.adapters.completion_context import CompletionContext, current_completion_context
+from backend.services.copilot_adapter import CopilotAdapter
 from backend.services.events.activity_projection import ActivityProjection
 from backend.services.events.event_bus import EventBus
-from backend.services.events.title_refinement import TitleRefinement, _Title
+from backend.services.events.title_refinement import TitleRefinement, _Request, _Title
 from backend.tests.unit.test_approval_service import session_factory as session_factory
 from backend.tests.unit.test_execution_contracts import _contract
+from backend.tests.unit.test_inference_account import accounts as accounts
+
+
+async def test_title_deletion_during_registered_receipt_preserves_worker(accounts, monkeypatch):
+    config = CPLConfig()
+    config.runtime.utility_sdk = "claude"
+    config.runtime.copilot_only = False
+    registry = AdapterRegistry(session_factory=accounts, config=config)
+    copilot = CopilotAdapter(session_factory=accounts)
+    registry._adapters[AgentSDK.copilot] = copilot
+    original_complete = copilot.complete
+    original_record = registry.record_utility_receipt
+    delegated = []
+
+    async def complete(*args, **kwargs):
+        job_id = current_completion_context().job_id
+        delegated.append(job_id)
+        if job_id == "job-a":
+            return await original_complete(*args, **kwargs)
+        return CompletionResult(text='{"title":"Inspect native execution ownership"}', model="test-model")
+
+    async def record(operation_id, phase, context, payload):
+        receipt_id = await original_record(operation_id, phase, context, payload)
+        if phase == "requested" and context.job_id == "job-a":
+            async with accounts() as session:
+                await CredentialRepository(session).delete("a")
+                await session.commit()
+        return receipt_id
+
+    monkeypatch.setattr(copilot, "complete", complete)
+    monkeypatch.setattr(registry, "record_utility_receipt", record)
+    client_factory = MagicMock(side_effect=AssertionError("Deleted credentials must not start native inference"))
+    monkeypatch.setattr("backend.services.copilot_adapter._adapter.create_copilot_client", client_factory)
+    host = SimpleNamespace(
+        _event_bus=EventBus(),
+        _session_factory=accounts,
+        _adapter_registry=registry,
+        _config=config,
+        execution_epoch="epoch",
+    )
+    assessments = AssessmentService()
+    titles = TitleRefinement(host, assessments)
+    titles.start()
+    try:
+        for job_id in ("job-a", "job-b"):
+            pin = ExecutionContractPin(job_id=job_id, admission_id="run", budget_id=job_id, contract=_contract("test"))
+            event = new_event(job_id, EventKind.turn_summary, {"activity_id": "activity"})
+            titles._queue.put_nowait(_Request(event, pin, "Title this activity"))
+        await asyncio.wait_for(titles._queue.join(), 5)
+        assert delegated == ["job-a", "job-b"]
+        assert not titles._task.done()
+        client_factory.assert_not_called()
+        async with accounts() as session:
+            for job_id, expected_titles in (("job-a", 0), ("job-b", 1)):
+                records = await EventRepository(session).list_after(0, job_id=job_id)
+                assert sum(record.event.kind == EventKind.turn_summary for record in records) == expected_titles
+    finally:
+        await titles.close()
+        await assessments.shutdown()
+
+
+async def test_title_account_deletion_fails_closed_and_worker_processes_next_account(accounts):
+    observed = []
+
+    async def complete(*args, **kwargs):
+        observed.append(current_completion_context())
+        return CompletionResult(text='{"title":"Inspect native execution ownership"}', model="test-model")
+
+    copilot = SimpleNamespace(complete=AsyncMock(side_effect=complete))
+    claude = SimpleNamespace(complete=AsyncMock())
+    registry = MagicMock()
+    registry.get_completion_provider.side_effect = lambda sdk: copilot if sdk == "copilot" else claude
+    config = CPLConfig()
+    config.runtime.utility_sdk = "claude"
+    config.runtime.copilot_only = False
+    host = SimpleNamespace(
+        _event_bus=EventBus(),
+        _session_factory=accounts,
+        _adapter_registry=registry,
+        _config=config,
+        execution_epoch="epoch",
+    )
+    assessments = AssessmentService()
+    titles = TitleRefinement(host, assessments)
+    titles.start()
+
+    def request(job_id):
+        pin = ExecutionContractPin(job_id=job_id, admission_id="run", budget_id=job_id, contract=_contract("test"))
+        return _Request(
+            new_event(job_id, EventKind.turn_summary, {"activity_id": "activity"}), pin, "Title this activity"
+        )
+
+    try:
+        titles._queue.put_nowait(request("job-a"))
+        await asyncio.wait_for(titles._queue.join(), 5)
+        async with accounts() as session:
+            await CredentialRepository(session).delete("a")
+            await session.commit()
+        titles._queue.put_nowait(request("job-a"))
+        titles._queue.put_nowait(request("job-b"))
+        await asyncio.wait_for(titles._queue.join(), 5)
+        assert [context.job_id for context in observed] == ["job-a", "job-b"]
+        assert all(
+            context.role == "title" and context.response_schema == _Title.model_json_schema() for context in observed
+        )
+        claude.complete.assert_not_awaited()
+        assert not titles._task.done()
+        async with accounts() as session:
+            for job_id in ("job-a", "job-b"):
+                records = await EventRepository(session).list_after(0, job_id=job_id)
+                records = [record for record in records if record.event.kind == EventKind.turn_summary]
+                assert len(records) == 1
+                assert records[0].event.payload["title"] == "Inspect native execution ownership"
+    finally:
+        await titles.close()
+        await assessments.shutdown()
 
 
 @pytest.mark.parametrize(

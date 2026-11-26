@@ -1466,6 +1466,34 @@ Each SDK only supports models from its provider ecosystem. Validation is perform
 
 If the user requests a model incompatible with the selected SDK (e.g., `gpt-4o` with `claude`), the API returns `400 Bad Request` with a descriptive error message. When no model is specified, the SDK uses its own default.
 
+#### Separate Copilot inference credentials
+
+Settings > Integrations can register a `copilot` credential using the existing
+encrypted credential store. New Job offers either the ambient Copilot login
+(legacy behavior) or an explicit credential. The label is user-supplied, not a
+verified account or billing identity. Git transport and `gh` authentication are
+unchanged; CodePlane does not mutate process-wide authentication.
+
+An explicit selection is supported only for managed Copilot jobs. The job
+persists `copilotCredentialId` and a label snapshot, never the token. Its binding
+is immutable and is retained for native resume, fresh-session resume fallback,
+reruns and follow-ups. Primary sessions, preflight, sidecars, naming,
+summarization, narration and other job-associated helpers resolve that binding
+from the credential store at invocation. Helpers route through Copilot even when
+the global default SDK is Claude. SDK clients disable logged-in-user fallback
+when an explicit token is supplied.
+
+Missing, deleted, wrong-provider, undecryptable or rejected credentials fail
+explicitly without silently selecting ambient authentication. Deleting a
+credential retains historical job references and makes future bound invocations
+fail. Model discovery for an explicit credential is authenticated per request;
+it never reuses or overwrites the ambient SDK model cache.
+
+This implementation provides per-job selection, not global/project account
+defaults, OAuth account management, verified billing attribution, BYOK, or
+account selection for imported sessions/Claude. Standalone tools without a job
+association retain their existing ambient/default-SDK behavior.
+
 ### 4.5 Session Config Resolution
 
 The `RuntimeService` constructs a `SessionConfig` directly from the `Job` record and resolved config (global + per-repo). There is no intermediate aggregation object. The inputs are:
@@ -1474,6 +1502,49 @@ The `RuntimeService` constructs a `SessionConfig` directly from the `Job` record
 - `prompt` — from `Job.prompt`
 - `mcp_servers` — discovered from the repo's MCP config files (see §10.2.1)
 - `protected_paths` — from per-repo config, translated to SDK-native permission rules by the adapter
+
+#### Session identity and peer notes
+
+Session details expose the internal job link, copyable identifiers, branch and
+worktree, current or most recent SDK session ID, and execution count. Parent and
+follow-up links describe the existing job lineage, not native subagents,
+ownership, or cancellation groups. Internal links do not grant sharing access.
+
+Managed Copilot executions receive `codeplane_list_peer_sessions` and
+`codeplane_send_peer_message` tools. The server binds the sender to the actual
+execution; tool arguments cannot choose a sender identity or claim operator
+authority. The UI also supports operator-attributed relay notes. Both paths are
+restricted to the same project and currently running managed Copilot recipients.
+Paused, gated, canceled, or finished sessions are not resumed by delivery.
+Verification and self-review sessions do not inherit peer tools. Under a
+restricted recipe capability grant, listing peers requires `read` and sending a
+note requires `delegate`. These names are classified only as server-registered
+custom tools; MCP or other unclassified tools still require the full grant.
+
+For recipe jobs, the directory exposes a paginated menu of instantiated agent
+cards with purpose, provider/model, current status, attempt/session identity, and
+delivery availability. Mixed-provider recipes remain discoverable, but only
+eligible Copilot executions accept these notes. Senders choose an agent rather
+than an arbitrary primary session. An attempt ID and execution token bind each
+recipe delivery to that exact execution; stale selections reject instead of
+silently targeting a replacement. Sibling agents in one recipe may communicate,
+but an agent cannot send to itself. Cards refresh in the UI and require explicit
+selection. An unavailable prior selection can still retrieve its original
+delivery receipt without changing the saved request or erasing an edited draft.
+
+Each message ID reserves a durable receipt before transport. Reusing an ID with
+the identical request returns that receipt without sending again; conflicting
+reuse is rejected. Receipts distinguish `accepted` (SDK enqueue succeeded, not
+confirmed read or acknowledged), `rejected` (known non-delivery), and `unknown`
+(delivery cannot be confirmed, including a crash after reservation). An unknown
+receipt is not automatically replayed. A deliberate new attempt uses a new ID.
+Reply references must belong to the same pair of jobs. Accepted notes appear as
+attributed system transcript events, with peer content explicitly marked as
+untrusted context rather than operator instructions.
+
+The directory and receipt history are paginated. This is direct active-session
+communication, not a durable delivery queue, scheduler, or new local-process
+security boundary.
 
 ### 4.6 Pydantic API Schemas
 

@@ -55,7 +55,12 @@ from backend.persistence.job_repo import JobRepository
 from backend.services.adapters.integration_policy import IntegrationDisabledError, IntegrationPolicy
 from backend.services.completers.copilot_steer import NativeDeliveryError
 from backend.services.job.job_service import JobService
-from backend.services.runtime.attempt_bindings import AttemptBindingConflictError, AttemptBindings, AttemptExecution
+from backend.services.runtime.attempt_bindings import (
+    AttemptBinding,
+    AttemptBindingConflictError,
+    AttemptBindings,
+    AttemptExecution,
+)
 from backend.services.runtime.execution_control import ExecutionControl
 from backend.services.runtime.handoff import (
     build_followup_handoff_prompt_for_job,
@@ -123,6 +128,7 @@ class AgentSession:
     def __init__(self) -> None:
         self._session_id: str | None = None
         self._adapter: AgentAdapterInterface | None = None
+        self.tools_paused = False
         self.execution_token: str | None = None
 
     @property
@@ -151,16 +157,25 @@ class AgentSession:
             await self._adapter.interrupt_session(self._session_id)
 
     def pause_tools(self) -> None:
+        self.tools_paused = True
         if self._adapter and self._session_id:
             self._adapter.pause_tools(self._session_id)
 
     def resume_tools(self) -> None:
+        self.tools_paused = False
         if self._adapter and self._session_id:
             self._adapter.resume_tools(self._session_id)
 
     async def abort(self) -> None:
         if self._adapter and self._session_id:
             await self._adapter.abort_session(self._session_id)
+
+    async def send_peer_message(
+        self, message: str, *, admission: Callable[[], contextlib.AbstractAsyncContextManager[None]] | None = None
+    ) -> None:
+        if self.tools_paused or self._adapter is None or self._session_id is None:
+            raise StateConflictError("Recipient is paused or has no live SDK session")
+        await self._adapter.send_peer_message(self._session_id, message, admission=admission)
 
 
 class EventAction(enum.Enum):
@@ -211,6 +226,8 @@ if TYPE_CHECKING:
     from backend.services.sidecar.session import SidecarSessionManager
 
 log = structlog.get_logger()
+
+_PEER_SEND_TIMEOUT_SECONDS = 30.0
 
 _SERVER_RESTART_RECOVERY_INSTRUCTION = (
     "The CodePlane server restarted while this job was in progress. "
@@ -423,6 +440,7 @@ class RuntimeService:
         return self._adapter_registry.get_adapter(sdk)
 
     def _make_job_service(self, session: AsyncSession) -> JobService:
+        from backend.persistence.credential_repo import CredentialRepository
         from backend.persistence.project_repo import ProjectRepository
 
         return JobService(
@@ -431,6 +449,7 @@ class RuntimeService:
             config=self._config,
             event_bus=self._event_bus,
             project_repo=ProjectRepository(session),
+            credential_repo=CredentialRepository(session),
         )
 
     async def _get_job(self, job_id: str) -> Job | None:
@@ -486,7 +505,7 @@ class RuntimeService:
                 return
 
             if needs_title:
-                title = await self._generate_title_safe(context)
+                title = await self._generate_title_safe(context, job_id=job_id)
                 if title:
                     from backend.persistence.database import serialized_write
 
@@ -503,7 +522,7 @@ class RuntimeService:
                     log.info("finalize_title_generated", job_id=job_id, title=title)
 
             if needs_description:
-                desc = await self._generate_description_safe(context)
+                desc = await self._generate_description_safe(context, job_id=job_id)
                 if desc:
                     from backend.persistence.database import serialized_write
 
@@ -517,7 +536,7 @@ class RuntimeService:
         except Exception:
             log.debug("finalize_naming_failed", job_id=job_id, exc_info=True)
 
-    async def _generate_title_safe(self, context: str) -> str | None:
+    async def _generate_title_safe(self, context: str, *, job_id: str | None = None) -> str | None:
         """One-shot title generation via sidecar. Returns None on failure."""
         try:
             sidecar_sessions = self._sidecar_sessions
@@ -528,13 +547,13 @@ class RuntimeService:
                 "Respond with ONLY the title text, no quotes, no punctuation at the end.\n\n"
                 f"Task:\n{context}"
             )
-            title = await sidecar_sessions.complete(prompt, timeout=10.0)
+            title = await sidecar_sessions.complete(prompt, timeout=10.0, job_id=job_id)
             title = str(title).strip().strip('"').strip("'")
             return title if title and len(title) >= 3 else None
         except Exception:
             return None
 
-    async def _generate_description_safe(self, context: str) -> str | None:
+    async def _generate_description_safe(self, context: str, *, job_id: str | None = None) -> str | None:
         """One-shot description generation via sidecar. Returns None on failure."""
         try:
             sidecar_sessions = self._sidecar_sessions
@@ -546,7 +565,7 @@ class RuntimeService:
                 "Respond with ONLY the description text.\n\n"
                 f"Task:\n{context}"
             )
-            desc = await sidecar_sessions.complete(prompt, timeout=10.0)
+            desc = await sidecar_sessions.complete(prompt, timeout=10.0, job_id=job_id)
             desc = str(desc).strip()
             return desc if desc and len(desc) >= 10 else None
         except Exception:
@@ -1584,12 +1603,11 @@ class RuntimeService:
         if self._approval_service is None:
             raise ServiceInitError("approval_service must be set before handling approvals")
 
+        self._waiting_for_approval.add(job_id)
         async with self._session_factory() as sess:
             svc = self._make_job_service(sess)
             await svc.transition_state(job_id, JobState.waiting_for_approval)
             await sess.commit()
-
-        self._waiting_for_approval.add(job_id)
 
         await self._event_bus.publish(domain_event)
 
@@ -1609,8 +1627,6 @@ class RuntimeService:
             )
         )
 
-        self._waiting_for_approval.discard(job_id)
-
         if resolution == ApprovalResolution.rejected:
             # Leave job in waiting_for_approval — the caller will fail it
             # via _fail_job which handles the waiting_for_approval → failed
@@ -1622,6 +1638,7 @@ class RuntimeService:
             await svc.transition_state(job_id, JobState.running)
             await sess.commit()
         await self._publish_state_event(job_id, JobState.waiting_for_approval, JobState.running)
+        self._waiting_for_approval.discard(job_id)
         self._last_activity[job_id] = time.monotonic()
 
         return resolution
@@ -1890,6 +1907,54 @@ class RuntimeService:
 
         return EventAction.publish, error_reason
 
+    def _with_peer_callbacks(
+        self,
+        config: SessionConfig,
+        job_id: str,
+        get_execution: Callable[[], AgentSession | AttemptBinding | None],
+    ) -> SessionConfig:
+        if config.sdk != "copilot":
+            return config
+        from backend.models.api_schemas import PeerMessageRequest
+        from backend.services.session_coordination import SessionCoordination
+
+        coordination = SessionCoordination(self._session_factory, self)
+
+        async def peer_directory(offset: int = 0, target_job_id: str | None = None, cursor: str = "") -> dict[str, Any]:
+            if not self.peer_execution_is_current(job_id, get_execution()):
+                raise StateConflictError("The sending execution is no longer active")
+            result = (
+                await coordination.agents(job_id, target_job_id, cursor)
+                if target_job_id
+                else await coordination.directory(job_id, offset)
+            )
+            return result.model_dump(mode="json", by_alias=True)
+
+        async def peer_message(
+            message_id: str,
+            recipient_id: str,
+            content: str,
+            reply_to: str | None,
+            recipient_attempt_id: str | None = None,
+            recipient_execution_token: str | None = None,
+        ) -> dict[str, Any]:
+            receipt = await coordination.send(
+                job_id,
+                PeerMessageRequest(
+                    message_id=message_id,
+                    recipient_job_id=recipient_id,
+                    content=content,
+                    reply_to=reply_to,
+                    recipient_attempt_id=recipient_attempt_id,
+                    recipient_execution_token=recipient_execution_token,
+                ),
+                origin="agent",
+                sender_execution=get_execution(),
+            )
+            return receipt.model_dump(mode="json", by_alias=True)
+
+        return dataclass_replace(config, peer_directory_handler=peer_directory, peer_message_handler=peer_message)
+
     async def _execute_session_attempt(
         self,
         job_id: str,
@@ -1903,6 +1968,8 @@ class RuntimeService:
         error_reason: str | None = None
         made_progress = False
         downgrade: tuple[str, str] | None = None
+
+        config = self._with_peer_callbacks(config, job_id, lambda: agent_session)
 
         async for session_event in agent_session.execute(
             dataclass_replace(config, execution_epoch=self._execution_epoch),
@@ -2468,11 +2535,14 @@ class RuntimeService:
         )
         session_id: str | None = None
         token: str | None = None
+        binding: AttemptBinding | None = None
+        deferred = self._with_peer_callbacks(deferred, job_id, lambda: binding)
         try:
             session_id = await adapter.create_session(deferred)
             context = await self.register_attempt_execution(job_id, attempt_id, adapter, session_id, sdk=config.sdk)
             token = context.execution_token
             assert token is not None
+            binding = self._attempt_bindings.get(job_id, attempt_id)
             yield AttemptExecution(adapter, session_id, token)
         finally:
             if session_id is not None:
@@ -2480,8 +2550,8 @@ class RuntimeService:
                     async with asyncio.timeout(30):
                         await adapter.abort_session(session_id)
                 else:
-                    binding = self._attempt_bindings.get(job_id, attempt_id)
-                    if binding is not None and binding.token == token:
+                    current_binding = self._attempt_bindings.get(job_id, attempt_id)
+                    if current_binding is not None and current_binding.token == token:
                         await self.cancel_attempt_execution(job_id, attempt_id, token)
 
     async def register_attempt_execution(
@@ -3101,6 +3171,129 @@ class RuntimeService:
         self._echo_suppress.setdefault(job_id, set()).add(message)
         return True
 
+    def current_peer_session(
+        self, job_id: str, *, attempt_id: str | None = None, execution_token: str | None = None
+    ) -> AgentSession | AttemptBinding | None:
+        task = self._tasks.get(job_id)
+        if (
+            task is None
+            or task.done()
+            or task.cancelling()
+            or self._active_gates.get(job_id)
+            or job_id in self._waiting_for_approval
+        ):
+            return None
+        if attempt_id is not None:
+            binding = self._attempt_bindings.get(job_id, attempt_id)
+            controller = self._recipe_controllers.get(job_id)
+            owned = controller.owned_attempt(attempt_id) if controller else None
+            if (
+                binding is None
+                or binding.sdk != "copilot"
+                or binding.cancel_requested
+                or (execution_token is not None and binding.token != execution_token)
+                or owned is None
+                or owned.task.done()
+                or owned.task.cancelling()
+            ):
+                return None
+            return binding
+        if job_id in self._recipe_controllers or self._attempt_bindings.for_job(job_id):
+            return None
+        session = self._agent_sessions.get(job_id)
+        if session is None or session.tools_paused or session.session_id is None:
+            return None
+        if execution_token is not None and session.execution_token != execution_token:
+            return None
+        return session
+
+    def peer_execution_is_current(self, job_id: str, target: AgentSession | AttemptBinding | None) -> bool:
+        if target is None:
+            return False
+        if isinstance(target, AttemptBinding):
+            return (
+                self.current_peer_session(job_id, attempt_id=target.attempt_id, execution_token=target.token) is target
+            )
+        return self.current_peer_session(job_id) is target
+
+    async def peer_execution_is_eligible(self, job_id: str, target: AgentSession | AttemptBinding | None) -> bool:
+        if not self.peer_execution_is_current(job_id, target):
+            return False
+        if isinstance(target, AttemptBinding):
+            from backend.persistence.recipe_run_repo import RecipeRunRepository
+
+            try:
+                await self._require_attempt_job(job_id, target.attempt_id)
+            except AttemptBindingConflictError:
+                return False
+            async with self._session_factory() as session:
+                repository = RecipeRunRepository(session)
+                attempt = await repository.get_attempt(target.attempt_id)
+                step = await repository.get_step(attempt.step_instance_id) if attempt else None
+                run = await repository.get(step.run_id) if step else None
+                if (
+                    attempt is None
+                    or attempt.result is not None
+                    or step is None
+                    or step.current_attempt_id != target.attempt_id
+                    or step.state != "running"
+                    or run is None
+                    or run.job_id != job_id
+                    or run.state != "running"
+                    or run.resolved_at is not None
+                    or run.cancel_requested_at is not None
+                ):
+                    return False
+        else:
+            from backend.persistence.approval_repo import ApprovalRepository
+
+            async with self._session_factory() as session:
+                job = await JobRepository(session).get(job_id)
+                if (
+                    job is None
+                    or job.source != "managed"
+                    or job.observation_only
+                    or job.state != JobState.running
+                    or self._shutting_down
+                    or await ApprovalRepository(session).has_blocking_approvals(job_id)
+                ):
+                    return False
+        return self.peer_execution_is_current(job_id, target)
+
+    async def deliver_peer_note(
+        self,
+        job_id: str,
+        target: AgentSession | AttemptBinding,
+        message: str,
+        *,
+        can_send: Callable[[], Awaitable[bool]] | None = None,
+        sender_job_id: str | None = None,
+    ) -> None:
+        async def eligible() -> bool:
+            allowed = can_send is None or await can_send()
+            return allowed and self.peer_execution_is_current(job_id, target)
+
+        if not await eligible():
+            raise StateConflictError("Recipient execution changed before dispatch")
+
+        @contextlib.asynccontextmanager
+        async def admission() -> AsyncIterator[None]:
+            job_ids = {job_id}
+            if sender_job_id is not None:
+                job_ids.add(sender_job_id)
+            async with contextlib.AsyncExitStack() as stack:
+                for current_job_id in sorted(job_ids):
+                    await stack.enter_async_context(self._execution_control.hold(current_job_id))
+                if not await eligible():
+                    raise StateConflictError("Peer execution changed or is no longer eligible for dispatch")
+                yield
+
+        async with asyncio.timeout(_PEER_SEND_TIMEOUT_SECONDS):
+            await target.send_peer_message(message, admission=admission)
+
+    async def publish_peer_note(self, event: SessionEvent) -> None:
+        await self._event_bus.publish(event)
+
     async def resolve_policy_batch(
         self,
         job_id: str,
@@ -3686,11 +3879,11 @@ class RuntimeService:
         )
 
         # Transition to waiting_for_approval and publish event
+        self._waiting_for_approval.add(job_id)
         async with self._session_factory() as sess:
             svc = self._make_job_service(sess)
             await svc.transition_state(job_id, JobState.waiting_for_approval)
             await sess.commit()
-        self._waiting_for_approval.add(job_id)
 
         await self._event_bus.publish(
             new_event(
@@ -3726,7 +3919,6 @@ class RuntimeService:
             )
         )
 
-        self._waiting_for_approval.discard(job_id)
         self._last_activity[job_id] = time.monotonic()
 
         # -- Rejection → re-plan loop (iterative, not recursive) ----------
@@ -3748,6 +3940,7 @@ class RuntimeService:
                     await svc.transition_state(job_id, JobState.running)
                     await sess.commit()
                 await self._publish_state_event(job_id, JobState.waiting_for_approval, JobState.running)
+                self._waiting_for_approval.discard(job_id)
 
                 feedback = operator_notes or "The operator rejected the plan without specific feedback."
                 replan_prompt = build_replan_prompt(job, plan_text, feedback)
@@ -3789,11 +3982,11 @@ class RuntimeService:
                     requires_explicit_approval=True,
                 )
 
+                self._waiting_for_approval.add(job_id)
                 async with self._session_factory() as sess:
                     svc = self._make_job_service(sess)
                     await svc.transition_state(job_id, JobState.waiting_for_approval)
                     await sess.commit()
-                self._waiting_for_approval.add(job_id)
 
                 await self._event_bus.publish(
                     new_event(
@@ -3827,7 +4020,6 @@ class RuntimeService:
                     )
                 )
 
-                self._waiting_for_approval.discard(job_id)
                 self._last_activity[job_id] = time.monotonic()
 
             except asyncio.CancelledError:
@@ -3857,6 +4049,7 @@ class RuntimeService:
             await svc.transition_state(job_id, JobState.running)
             await job_repo.update_mode(job_id, JobMode.plan_implementing)
         await self._publish_state_event(job_id, JobState.waiting_for_approval, JobState.running)
+        self._waiting_for_approval.discard(job_id)
         await self._event_bus.publish(
             new_event(
                 session_id=job_id,

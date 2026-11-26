@@ -584,18 +584,12 @@ async def _wire_core_services(
     )
 
     # --- Sidecar session manager (per-job dedicated utility sessions) ---
-    utility_adapter = adapter_registry.get_adapter(adapter_registry.policy.default_sdk)
-    from backend.services.adapters.adapter_registry import UnavailableTextCompletion
-    from backend.services.adapters.agent_adapter import UtilityCompletionError
-    from backend.services.adapters.integration_policy import IntegrationDisabledError
+    from backend.services.adapters.inference_utility_adapter import InferenceUtilityAdapter
 
-    try:
-        utility_completion: TextCompletionProvider = adapter_registry.get_completion_provider(
-            config.runtime.utility_sdk,
-        )
-    except (IntegrationDisabledError, UtilityCompletionError) as exc:
-        log.error("utility_completion_unavailable", reason=str(exc))
-        utility_completion = UnavailableTextCompletion(str(exc))
+    utility_adapter = InferenceUtilityAdapter(
+        adapter_registry, adapter_registry.policy.default_sdk, session_factory, utility_sdk=config.runtime.utility_sdk
+    )
+    utility_completion: TextCompletionProvider = utility_adapter
     sidecar_sessions = SidecarSessionManager(
         adapter=utility_adapter,
         model=config.runtime.utility_model,

@@ -227,6 +227,57 @@ class TestHealth:
 
 
 class TestJobsCrud:
+    async def test_copilot_account_roundtrip_and_catalog_isolation(
+        self,
+        client: AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from cryptography.fernet import Fernet
+
+        cipher = Fernet(Fernet.generate_key())
+        monkeypatch.setattr(
+            "backend.persistence.credential_repo.encrypt_secret", lambda value: cipher.encrypt(value.encode()).decode()
+        )
+        monkeypatch.setattr(
+            "backend.persistence.credential_repo.decrypt_secret", lambda value: cipher.decrypt(value.encode()).decode()
+        )
+        credential = await client.post(
+            "/api/settings/credentials",
+            json={
+                "provider": "copilot",
+                "label": "Personal inference",
+                "baseUrl": "https://github.com",
+                "pat": "sentinel-inference-token",
+            },
+        )
+        assert credential.status_code == 201
+        account_id = credential.json()["id"]
+        assert "sentinel-inference-token" not in credential.text
+        assert "sentinel-inference-token" not in (await client.get("/api/settings/credentials")).text
+        created = await client.post("/api/jobs", json=_create_body(copilotCredentialId=account_id))
+        assert created.status_code == 201
+        assert created.json()["copilotCredentialId"] == account_id
+        job = await client.get(f"/api/jobs/{created.json()['id']}")
+        assert job.json()["copilotCredentialLabel"] == "Personal inference"
+        ambient = [{"id": "ambient-model", "name": "Ambient model"}]
+        fetch = AsyncMock(return_value=ambient)
+        monkeypatch.setattr("backend.services.copilot_adapter._models.fetch_copilot_models_raw", fetch)
+        assert (await client.get("/api/models", params={"sdk": "copilot"})).json()["items"] == ambient
+        fetch.reset_mock()
+        fetch.return_value = [{"id": "account-model", "name": "Account model"}]
+        catalog = await client.get("/api/models", params={"sdk": "copilot", "copilotCredentialId": account_id})
+        assert catalog.status_code == 200
+        assert catalog.json()["items"] == [{"id": "account-model", "name": "Account model"}]
+        fetch.assert_awaited_once_with(github_token="sentinel-inference-token")
+        fetch.side_effect = RuntimeError("sentinel-inference-token")
+        failed = await client.get("/api/models", params={"sdk": "copilot", "copilotCredentialId": account_id})
+        assert failed.status_code == 409
+        assert "sentinel-inference-token" not in failed.text
+        assert (await client.get("/api/models", params={"sdk": "copilot"})).json()["items"] == ambient
+        assert (
+            await client.post("/api/jobs", json=_create_body(sdk="claude", copilotCredentialId=account_id))
+        ).status_code == 400
+
     # ── Create ──
 
     async def test_create_job_returns_201(self, client: AsyncClient) -> None:
@@ -513,6 +564,8 @@ class TestJobControl:
             branch="cpl/cont-2",
             worktree_path="/tmp/cont-2",
             sdk="copilot",
+            copilot_credential_id="account-a",
+            copilot_credential_label="Selected label",
             created_at=datetime.now(UTC),
         )
         resp = await client.post(

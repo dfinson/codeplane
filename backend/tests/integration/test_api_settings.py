@@ -733,12 +733,14 @@ class TestListSDKs:
         assert ("claude" in checked) is not copilot_only
 
     @pytest.mark.asyncio
-    async def test_copilot_keeps_models_from_other_providers(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_copilot_keeps_models_from_other_providers(
+        self, monkeypatch: pytest.MonkeyPatch, session_factory
+    ) -> None:
         from backend.api.jobs import list_models
         from backend.config import CPLConfig
         from backend.di import CachedModelsBySdk
 
         monkeypatch.setattr("backend.config.load_config", CPLConfig)
         catalog = CachedModelsBySdk({"copilot": [{"id": "claude-haiku-4.5", "name": "Claude Haiku 4.5"}]})
-        response = await list_models(catalog, sdk="copilot")
+        response = await list_models(catalog, session_factory, sdk="copilot", copilot_credential_id=None)
         assert [model.id for model in response.items] == ["claude-haiku-4.5"]

@@ -96,6 +96,7 @@ function makeJob(overrides: Partial<JobSummary> = {}): JobSummary {
     projectId: "project-1",
     title: "Fix bug",
     state: "review",
+    sessionCount: 1,
     baseRef: "main",
     worktreePath: "/repos/test/.cpl-worktrees/job-1",
     branch: "fix/bug",

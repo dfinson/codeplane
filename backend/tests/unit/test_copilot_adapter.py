@@ -362,7 +362,7 @@ class TestRuntimeContract:
         await asyncio.sleep(0)
         assert kwargs.get("excluded_tools") == ["write", "shell"]
         assert kwargs.get("system_message") == {"mode": "append", "content": "Read-only context brief"}
-        assert "tools" in kwargs and kwargs["tools"] is None
+        assert "tools" in kwargs and kwargs["tools"] == []
         assert kwargs["model"] == "primary-model"
 
     @pytest.mark.asyncio
@@ -867,6 +867,20 @@ class TestSendMessage:
 
         assert failure.value.uncertain is False
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("error_type", [_FakeJsonRpcError, _FakeProcessExitedError, ConnectionError])
+    async def test_ambient_send_failure_logs_and_reports_delivery_outcome(self, adapter, error_type):
+        session = _FakeCopilotSession()
+        session.send = AsyncMock(side_effect=error_type("Transport failed"))
+        adapter._sessions["sess-1"] = session
+        with (
+            patch("backend.services.copilot_adapter._adapter.log.warning") as warning,
+            pytest.raises(copilot_steer.NativeDeliveryError) as failure,
+        ):
+            await adapter.send_message("sess-1", "Follow-up")
+        assert failure.value.uncertain is (error_type is not _FakeJsonRpcError)
+        warning.assert_called_once_with("copilot_send_message_failed", session_id="sess-1", exc_info=True)
+
 
 # ---------------------------------------------------------------------------
 # Tests: abort_session
@@ -1085,6 +1099,29 @@ class TestOnEventCallback:
         assert len(transcripts) == 1
         assert transcripts[0].kind == EventKind.message_user
 
+    async def test_peer_echo_is_suppressed_before_recipe_consumption_and_scoped_to_native_session(self, adapter):
+        target_id, target_queue, target = await self._setup_session(adapter, _make_config(job_id="recipe-job"))
+        sibling_id, sibling_queue, sibling = await self._setup_session(adapter, _make_config(job_id="recipe-job"))
+        envelope = '{"messageId":"peer-note","content":"peer context"}'
+        await adapter.send_peer_message(target_id, envelope)
+        await self._fire(sibling, _FakeSdkSessionEvent("user.message", _FakeEventData(content=envelope)))
+        await self._fire(target, _FakeSdkSessionEvent("user.message", _FakeEventData(content=envelope)))
+        assert not [event for event in self._drain_queue(target_queue) if event.kind == EventKind.message_user]
+        sibling_messages = [event for event in self._drain_queue(sibling_queue) if event.kind == EventKind.message_user]
+        assert len(sibling_messages) == 1
+        assert sibling_messages[0].payload["content"] == envelope
+        assert target_id not in adapter._peer_echo_suppress
+
+        await self._fire(target, _FakeSdkSessionEvent("user.message", _FakeEventData(content="Operator follow-up")))
+        assert [event.payload["content"] for event in self._drain_queue(target_queue)] == ["Operator follow-up"]
+        target.send = AsyncMock(side_effect=TimeoutError("delivery uncertain"))
+        with pytest.raises(TimeoutError):
+            await adapter.send_peer_message(target_id, "uncertain peer context")
+        assert adapter._peer_echo_suppress[target_id] == {"uncertain peer context"}
+        await adapter.abort_session(target_id)
+        await adapter.abort_session(sibling_id)
+        assert not adapter._peer_echo_suppress
+
     @pytest.mark.asyncio
     async def test_system_notification_user_message_skipped(self, adapter: CopilotAdapter) -> None:
         sid, queue, session = await self._setup_session(adapter)
@@ -1125,6 +1162,65 @@ class TestOnEventCallback:
         assert len(error_events) == 1
         # Sentinel should be present
         assert None in all_items
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("answered", "error_kwargs", "fails"),
+        [
+            (True, {"error_type": "query"}, False),
+            (False, {"error_type": "query"}, True),
+            (True, {"error_type": "query", "status_code": 402}, True),
+            (True, {"error_type": "server"}, True),
+        ],
+    )
+    async def test_followup_without_response_keeps_completed_answer(
+        self, adapter: CopilotAdapter, answered: bool, error_kwargs: dict[str, Any], fails: bool
+    ) -> None:
+        sid, queue, session = await self._setup_session(adapter)
+        if answered:
+            await self._fire(session, _FakeSdkSessionEvent("assistant.message", _FakeEventData(content="Summary")))
+            await self._fire(session, _FakeSdkSessionEvent("user.message", _FakeEventData(content="Peer note")))
+        await self._fire(session, _FakeSdkSessionEvent("assistant.message", _FakeEventData(content="")))
+        error = _FakeEventData(message="No response was returned. Send your message again to retry.", **error_kwargs)
+        await self._fire(session, _FakeSdkSessionEvent("session.error", error))
+
+        all_items = []
+        while not queue.empty():
+            all_items.append(queue.get_nowait())
+        failures = [e for e in all_items if e is not None and e.kind == EventKind.job_failed]
+        assert len(failures) == (1 if fails else 0)
+        assert None in all_items
+        assert sid not in adapter._followup_sessions
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("error_kwargs", "expected"),
+        [
+            (
+                {"error_type": "authentication", "status_code": 401},
+                {"message": "Session failed for the selected Copilot credential"},
+            ),
+            ({"error_type": "server"}, {"message": "Copilot session failed", "error_type": "server"}),
+        ],
+    )
+    async def test_explicit_account_session_error_masks_provider_message(
+        self, adapter: CopilotAdapter, error_kwargs: dict[str, Any], expected: dict[str, str]
+    ) -> None:
+        sid, queue, _session = await self._setup_session(adapter)
+        error = _FakeEventData(message="provider detail token=SECRET_VALUE", **error_kwargs)
+
+        await adapter._process_sdk_event_inner(
+            _FakeSdkSessionEvent("session.error", error),
+            sid,
+            "job-1",
+            "gpt-4o",
+            [False],
+            queue,
+            explicit_account=True,
+        )
+
+        failures = self._drain_queue(queue)
+        assert [e.payload for e in failures if e.kind == EventKind.job_failed] == [expected]
 
     @pytest.mark.asyncio
     async def test_session_idle_emits_done(self, adapter: CopilotAdapter) -> None:
@@ -1790,6 +1886,229 @@ class TestTfEventEmission:
 # ---------------------------------------------------------------------------
 
 
+class TestExplicitInferenceAccount:
+    @pytest.mark.parametrize("phase", ["session", "startup", "completion"])
+    @pytest.mark.parametrize("credential_id", ["account-a", None])
+    async def test_teardown_failures_do_not_expose_explicit_or_inherited_credentials(
+        self, adapter, phase, credential_id
+    ):
+        import traceback
+
+        client = _FakeCopilotClient()
+        client.stop = AsyncMock(side_effect=OSError("secret-teardown-sentinel"))
+        client.force_stop = AsyncMock(side_effect=OSError("secret-teardown-sentinel"))
+        if phase != "session":
+            client.create_session = AsyncMock(side_effect=RuntimeError("secret-teardown-sentinel"))
+        with (
+            patch(
+                "backend.services.inference_account.resolve_inference_token",
+                AsyncMock(return_value="secret-teardown-sentinel"),
+            ),
+            patch("copilot.CopilotClient", return_value=client),
+            patch("backend.services.copilot_adapter._client.log") as client_log,
+            patch("backend.services.copilot_adapter._adapter.log") as adapter_log,
+        ):
+            try:
+                with pytest.raises(Exception) as failure:
+                    if phase == "completion":
+                        await adapter.complete("helper")
+                    else:
+                        session_id = await adapter.create_session(
+                            _make_config(job_id="job-a", copilot_credential_id=credential_id)
+                        )
+                        await adapter.abort_session(session_id)
+                assert "secret-teardown-sentinel" not in "".join(traceback.format_exception(failure.value))
+                assert client.force_stop.await_count > 0
+                calls = client_log.mock_calls + adapter_log.mock_calls
+                assert "secret-teardown-sentinel" not in str(calls)
+                assert all(not call.kwargs.get("exc_info") for call in calls)
+                assert any(call.args[0] == "copilot_stop_task_failed" for call in adapter_log.error.call_args_list)
+            finally:
+                client.stop = AsyncMock()
+                await adapter.shutdown()
+            assert not adapter._explicit_account_sessions
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("credential_id", ["account-a", None])
+    @pytest.mark.parametrize("error_type", [_FakeJsonRpcError, _FakeProcessExitedError, ConnectionError])
+    async def test_followup_rejection_is_safe_and_not_published(self, adapter, credential_id, error_type):
+        import traceback
+
+        from backend.services.inference_account import InferenceAccountError
+        from backend.services.runtime.service import AgentSession, RuntimeService
+
+        with (
+            patch(
+                "backend.services.inference_account.resolve_inference_token", AsyncMock(return_value="selected-token")
+            ),
+            patch("copilot.CopilotClient", return_value=_FakeCopilotClient()) as factory,
+        ):
+            session_id = await adapter.create_session(_make_config(job_id="job-a", copilot_credential_id=credential_id))
+            sdk_session = adapter._sessions[session_id]
+            sdk_session.send = AsyncMock(side_effect=error_type("Authentication rejected: selected-token"))
+            target = AgentSession()
+            target._adapter = adapter
+            target._session_id = session_id
+            runtime = MagicMock(spec=RuntimeService)
+            runtime._agent_sessions = {"job-a": target}
+            runtime._event_bus = AsyncMock()
+            runtime._step_tracker = None
+            runtime._echo_suppress = {}
+            runtime._session_factory = MagicMock()
+            runtime._session_factory.return_value.__aenter__ = AsyncMock()
+            runtime._native_executions = MagicMock()
+            runtime._native_executions.for_job.return_value = []
+            try:
+                with (
+                    patch(
+                        "backend.persistence.recipe_run_repo.RecipeRunRepository.get_for_job",
+                        AsyncMock(return_value=None),
+                    ),
+                    patch("backend.services.copilot_adapter._adapter.log.warning") as warning,
+                    pytest.raises(InferenceAccountError, match="selected Copilot credential") as error,
+                ):
+                    await RuntimeService.send_message(runtime, "job-a", "Follow-up")
+                assert "selected-token" not in "".join(traceback.format_exception(error.value))
+                warning.assert_not_called()
+                runtime._event_bus.publish.assert_not_awaited()
+                assert not runtime._echo_suppress
+                sdk_session.send.assert_awaited_once_with("Follow-up", mode="immediate")
+                factory.assert_called_once_with(github_token="selected-token", use_logged_in_user=False)
+            finally:
+                await adapter.abort_session(session_id)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("credential_id", ["account-a", None])
+    async def test_async_error_payload_is_safe_for_explicit_and_inherited_accounts(self, adapter, credential_id):
+        with (
+            patch(
+                "backend.services.inference_account.resolve_inference_token", AsyncMock(return_value="selected-token")
+            ),
+            patch("copilot.CopilotClient", return_value=_FakeCopilotClient()),
+        ):
+            session_id = await adapter.create_session(_make_config(job_id="job-a", copilot_credential_id=credential_id))
+        sdk_session = adapter._sessions[session_id]
+        sdk_session.fire_event(
+            _FakeSdkSessionEvent(
+                "session.error",
+                _FakeEventData(
+                    message="Authentication failed: selected-token",
+                    stack="Bearer selected-token",
+                    url="https://example.invalid/?token=selected-token",
+                ),
+            )
+        )
+
+        async def collect():
+            return [event async for event in adapter.stream_events(session_id)]
+
+        events = await asyncio.wait_for(collect(), timeout=5)
+        failures = [event for event in events if event.kind == EventKind.job_failed]
+        assert len(failures) == 1
+        assert failures[0].payload == {"message": "Session failed for the selected Copilot credential"}
+        assert all("selected-token" not in event.model_dump_json() for event in events)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("resume", "fallback"), [(False, False), (True, False), (True, True)])
+    async def test_primary_and_resume_fallback_keep_explicit_token(self, adapter, resume, fallback):
+        client = _FakeCopilotClient()
+        client.create_session = AsyncMock(wraps=client.create_session)
+        client.resume_session = AsyncMock(
+            wraps=client.resume_session,
+            side_effect=_FakeJsonRpcError("not resumable") if fallback else None,
+        )
+        with (
+            patch(
+                "backend.services.inference_account.resolve_inference_token", AsyncMock(return_value="selected-token")
+            ),
+            patch("backend.services.copilot_adapter._peer_tools.build_peer_tools", return_value=["peer-tool-sentinel"]),
+            patch("copilot.CopilotClient", return_value=client) as factory,
+        ):
+            session_id = await adapter.create_session(
+                _make_config(
+                    copilot_credential_id="account-a",
+                    resume_sdk_session_id="old" if resume else None,
+                )
+            )
+        factory.assert_called_once_with(github_token="selected-token", use_logged_in_user=False)
+        if not resume or fallback:
+            assert client.create_session.await_args.kwargs["github_token"] == "selected-token"
+            assert client.create_session.await_args.kwargs["tools"] == ["peer-tool-sentinel"]
+        else:
+            client.create_session.assert_not_awaited()
+        if resume:
+            assert client.resume_session.await_args.kwargs["github_token"] == "selected-token"
+            assert client.resume_session.await_args.kwargs["tools"] == ["peer-tool-sentinel"]
+        await adapter.abort_session(session_id)
+
+    @pytest.mark.asyncio
+    async def test_missing_credential_does_not_create_sdk_client(self, adapter):
+        from backend.services.inference_account import InferenceAccountError
+
+        with (
+            patch(
+                "backend.services.inference_account.resolve_inference_token",
+                AsyncMock(side_effect=InferenceAccountError("missing")),
+            ),
+            patch("copilot.CopilotClient") as factory,
+            pytest.raises(InferenceAccountError),
+        ):
+            await adapter.complete("helper")
+        factory.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("error_event", [False, True])
+    async def test_completion_uses_account_and_rejects_session_auth_error(self, adapter, error_event):
+        from backend.services.adapters.agent_adapter import UtilityCompletionError
+
+        session = _FakeCopilotSession()
+        client = _FakeCopilotClient()
+        client.create_session = AsyncMock(return_value=session)
+
+        def subscribe(callback):
+            callback(
+                _FakeSdkSessionEvent(
+                    "session.error" if error_event else "assistant.message",
+                    _FakeEventData(content="answer", message="selected-token"),
+                )
+            )
+            callback(_FakeSdkSessionEvent("session.idle", _FakeEventData()))
+
+        session.on = subscribe
+        with (
+            patch(
+                "backend.services.inference_account.resolve_inference_token", AsyncMock(return_value="selected-token")
+            ),
+            patch("copilot.CopilotClient", return_value=client) as factory,
+        ):
+            if error_event:
+                with pytest.raises(UtilityCompletionError, match="selected Copilot credential") as error:
+                    await adapter.complete("helper")
+                assert "selected-token" not in str(error.value)
+            else:
+                assert (await adapter.complete("helper")).text == "answer"
+        factory.assert_called_once_with(github_token="selected-token", use_logged_in_user=False)
+        assert client.create_session.await_args.kwargs["github_token"] == "selected-token"
+
+    @pytest.mark.asyncio
+    async def test_revoked_token_fails_without_ambient_retry(self, adapter):
+        from backend.services.adapters.agent_adapter import UtilityCompletionError
+
+        client = _FakeCopilotClient()
+        client.create_session = AsyncMock(side_effect=_FakeJsonRpcError("selected-token"))
+        with (
+            patch(
+                "backend.services.inference_account.resolve_inference_token", AsyncMock(return_value="selected-token")
+            ),
+            patch("copilot.CopilotClient", return_value=client) as factory,
+            pytest.raises(UtilityCompletionError) as error,
+        ):
+            await adapter.complete("helper")
+        factory.assert_called_once_with(github_token="selected-token", use_logged_in_user=False)
+        assert client.create_session.await_count == 1
+        assert "selected-token" not in str(error.value)
+
+
 class TestComplete:
     @staticmethod
     def _client(session: _FakeCopilotSession) -> SimpleNamespace:
@@ -1932,21 +2251,30 @@ class TestComplete:
         from backend.services.action_policy import assessment
         from backend.tests.unit.test_assessment_service import FIELDS
 
-        monkeypatch.setattr(assessment, "DECISION_SECONDS", 0.03)
+        monkeypatch.setattr(assessment, "DECISION_SECONDS", 5)
         client = self._client(_FakeCopilotSession())
-        cancelled, release_cleanup = asyncio.Event(), asyncio.Event()
+        entered, cancelled, release_cleanup = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
         async def blocked_catalog():
             try:
+                entered.set()
                 await asyncio.Event().wait()
             finally:
                 cancelled.set()
+
+        async def expire_during_catalog(tasks, *, timeout):
+            assert 0 < timeout <= assessment.DECISION_SECONDS
+            await asyncio.wait_for(entered.wait(), 1)
+            return set(), tasks
 
         client.list_models.side_effect = blocked_catalog
         client.stop.side_effect = release_cleanup.wait
         service = assessment.AssessmentService()
         try:
-            with patch("copilot.CopilotClient", return_value=client):
+            with (
+                patch("copilot.CopilotClient", return_value=client),
+                patch("backend.services.action_policy.assessment.asyncio.wait", side_effect=expire_during_catalog),
+            ):
                 result = await asyncio.wait_for(
                     service.assess(
                         assessment.ActionBinding.create("fixture", "epoch", {}, fields=FIELDS),

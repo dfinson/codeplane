@@ -20,6 +20,7 @@ from backend.persistence.event_repo import EventRepository
 from backend.services.action_policy.credential_filter import filter_credentials
 from backend.services.adapters.agent_adapter import UtilityCompletionError
 from backend.services.adapters.completion_context import CompletionContext, completion_context
+from backend.services.adapters.inference_utility_adapter import InferenceUtilityAdapter
 
 if TYPE_CHECKING:
     from backend.models.execution_contracts import ExecutionContractPin
@@ -157,7 +158,12 @@ class TitleRefinement:
             async with asyncio.timeout(8):
                 while self._assessments.active:
                     await asyncio.sleep(0.025)
-                provider = self._host._adapter_registry.get_completion_provider(self._host._config.runtime.utility_sdk)
+                provider = InferenceUtilityAdapter(
+                    self._host._adapter_registry,
+                    self._host._config.runtime.default_sdk,
+                    self._host._session_factory,
+                    utility_sdk=self._host._config.runtime.utility_sdk,
+                )
                 with completion_context(
                     CompletionContext(
                         role="title",

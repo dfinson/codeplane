@@ -114,7 +114,10 @@ async def test_managed_policy_gate_uses_runtime_approval_state_and_exact_adapter
             assert await asyncio.wait_for(pending, 1) == expected
         if resolution != "shutdown":
             assert not await approvals.list_pending("job-1")
-            assert "job-1" not in host._waiting_for_approval
+            if resolution == ApprovalResolution.approved:
+                assert "job-1" not in host._waiting_for_approval
+            else:
+                assert "job-1" in host._waiting_for_approval
     finally:
         for task in (pending, handler):
             if task is not None:

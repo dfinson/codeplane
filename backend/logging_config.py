@@ -105,7 +105,8 @@ def setup_logging(
         foreign_pre_chain=shared_processors,
         processors=[
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
-            structlog.dev.ConsoleRenderer(colors=False),
+            # The default rich formatter renders frame locals, which can hold credentials.
+            structlog.dev.ConsoleRenderer(colors=False, exception_formatter=structlog.dev.plain_traceback),
         ],
     )
 

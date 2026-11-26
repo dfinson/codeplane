@@ -498,10 +498,10 @@ export async function releaseUtilitySession(token: string): Promise<void> {
   });
 }
 
-export function suggestNames(prompt: string): Promise<import("./types").SuggestNamesResponse> {
+export function suggestNames(prompt: string, copilotCredentialId?: string): Promise<import("./types").SuggestNamesResponse> {
   return request("/jobs/suggest-names", {
     method: "POST",
-    body: JSON.stringify({ prompt }),
+    body: JSON.stringify({ prompt, copilotCredentialId }),
   });
 }
 
@@ -523,8 +523,11 @@ export function rerunJob(jobId: string): Promise<CreateJobResponse> {
   });
 }
 
-export function fetchModels(sdk?: string): Promise<{ id?: string; name?: string; [key: string]: unknown }[]> {
-  const qs = sdk ? `?sdk=${encodeURIComponent(sdk)}` : "";
+export function fetchModels(sdk?: string, copilotCredentialId?: string): Promise<{ id?: string; name?: string; [key: string]: unknown }[]> {
+  const params = new URLSearchParams();
+  if (sdk) params.set("sdk", sdk);
+  if (copilotCredentialId) params.set("copilotCredentialId", copilotCredentialId);
+  const qs = params.size ? `?${params}` : "";
   return request<{ items: { id?: string; name?: string; [key: string]: unknown }[] }>(`/models${qs}`).then((r) => r.items);
 }
 

@@ -634,6 +634,7 @@ async def create_followup_job(host: RuntimeService, job_id: str, instruction: st
                 preset=original.preset,
                 model=original.model,
                 sdk=original.sdk,
+                copilot_credential_id=original.copilot_credential_id,
                 verify=original.verify,
                 self_review=original.self_review,
                 max_turns=original.max_turns,

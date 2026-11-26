@@ -215,6 +215,7 @@ async def app(
         recipe_runs,
         recipes,
         reviews,
+        session_coordination,
         settings,
         share,
         terminal,
@@ -231,6 +232,7 @@ async def app(
     # -- routers (same order as create_app) --------------------------------
     application.include_router(health.router, prefix="/api")
     application.include_router(jobs.router, prefix="/api")
+    application.include_router(session_coordination.router, prefix="/api")
     application.include_router(job_artifacts.router, prefix="/api")
     application.include_router(job_telemetry.router, prefix="/api")
     application.include_router(events.router, prefix="/api")

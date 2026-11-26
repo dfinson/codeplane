@@ -79,6 +79,7 @@ class CreateJobRequest(CamelModel):
     preset: Preset | None = None
     model: str | None = None
     sdk: str | None = None
+    copilot_credential_id: str | None = Field(None, min_length=1, max_length=128)
     verify: bool | None = None
     self_review: bool | None = None
     max_turns: int | None = Field(None, ge=1, le=10)
@@ -245,6 +246,7 @@ class CreateManualTaskLinkRequest(CamelModel):
 
 
 class SuggestNamesRequest(CamelModel):
+    copilot_credential_id: str | None = Field(None, min_length=1, max_length=128)
     prompt: str = Field(min_length=1, max_length=50_000)
     repo: str | None = None
 
@@ -266,6 +268,8 @@ class CreateJobResponse(CamelModel):
     branch: str | None = None
     worktree_path: str | None = None
     sdk: str = "copilot"
+    copilot_credential_id: str | None = None
+    copilot_credential_label: str | None = None
     created_at: datetime
 
 
@@ -295,6 +299,8 @@ class JobResponse(CamelModel):
     progress_summary: str | None = None
     model: str | None = None
     sdk: str = "copilot"
+    copilot_credential_id: str | None = None
+    copilot_credential_label: str | None = None
     worktree_name: str | None = None
     verify: bool | None = None
     self_review: bool | None = None
@@ -306,6 +312,8 @@ class JobResponse(CamelModel):
     parent_job_id: str | None = None
     source: str = "managed"
     external_session_id: str | None = None
+    sdk_session_id: str | None = None
+    session_count: int = 1
     integration_binding_id: str | None = None
     observation_only: bool = False
     mode: JobMode = JobMode.standard
@@ -355,6 +363,8 @@ class JobResponse(CamelModel):
             failure_reason=job.failure_reason,
             model=job.model,
             sdk=job.sdk,
+            copilot_credential_id=job.copilot_credential_id,
+            copilot_credential_label=job.copilot_credential_label,
             worktree_name=job.worktree_name,
             verify=job.verify,
             self_review=job.self_review,
@@ -364,6 +374,8 @@ class JobResponse(CamelModel):
             enable_stall_detection=job.enable_stall_detection,
             enable_plan_tracking=job.enable_plan_tracking,
             parent_job_id=job.parent_job_id,
+            sdk_session_id=job.sdk_session_id,
+            session_count=job.session_count,
             source=job.source,
             external_session_id=job.external_session_id,
             integration_binding_id=job.integration_binding_id,
@@ -371,6 +383,69 @@ class JobResponse(CamelModel):
             mode=JobMode(job.mode) if isinstance(job.mode, str) else JobMode.standard,
             **overrides,
         )
+
+
+class SessionDirectoryResponse(CamelModel):
+    job: JobResponse
+    parent: JobResponse | None = None
+    children: list[JobResponse] = Field(default_factory=list)
+    children_has_more: bool = False
+    peers: list[JobResponse] = Field(default_factory=list)
+    peers_has_more: bool = False
+
+
+class PeerMessageRequest(CamelModel):
+    message_id: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
+    recipient_job_id: str = Field(min_length=1, max_length=128)
+    content: str = Field(min_length=1, max_length=10000)
+    reply_to: str | None = Field(default=None, max_length=128)
+    recipient_attempt_id: str | None = Field(default=None, min_length=1, max_length=128)
+    recipient_execution_token: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class SessionAgentCard(CamelModel):
+    agent_id: str
+    job_id: str
+    name: str
+    description: str
+    sdk: str
+    model: str | None = None
+    state: str
+    attempt_id: str | None = None
+    session_id: str | None = None
+    execution_token: str | None = None
+    accepts_peer_messages: bool
+    detail: str | None = None
+    updated_at: datetime
+
+
+class SessionAgentDirectoryResponse(CamelModel):
+    job_id: str
+    items: list[SessionAgentCard]
+    next_cursor: str | None = None
+    observed_at: datetime
+
+
+class PeerMessageResponse(CamelModel):
+    message_id: str
+    sender_job_id: str
+    recipient_job_id: str
+    sender_session_id: str | None
+    recipient_session_id: str | None
+    recipient_attempt_id: str | None = None
+    recipient_execution_token: str | None = None
+    sender_attempt_id: str | None = None
+    origin: Literal["agent", "operator"]
+    content: str
+    reply_to: str | None
+    status: Literal["accepted", "rejected", "unknown"]
+    detail: str
+    created_at: datetime
+
+
+class PeerMessageListResponse(CamelModel):
+    items: list[PeerMessageResponse] = Field(default_factory=list)
+    has_more: bool = False
 
 
 class RecipeResumeResponse(JobResponse):

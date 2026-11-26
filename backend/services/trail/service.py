@@ -209,7 +209,7 @@ class TrailService:
                 "no punctuation at the end.\n\n"
                 f"Agent message:\n{first_content[:2000]}"
             )
-            title = await self._sidecar_sessions.complete(prompt, timeout=10.0)
+            title = await self._sidecar_sessions.complete(prompt, timeout=10.0, job_id=job_id)
             title = str(title).strip().strip('"').strip("'")
             if not title or len(title) < 3:
                 return
