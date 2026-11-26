@@ -46,6 +46,7 @@ function SessionIdentityDetails({ job }: { job: JobSummary }) {
   const [sending, setSending] = useState(false);
   const [receipt, setReceipt] = useState<PeerMessageResponse | null>(null);
   const pendingRequest = useRef<{ key: string; id: string } | null>(null);
+  const draftRevision = useRef(0);
   const directory = useSessionCoordination((state) => state.directories[job.id]);
   const messages = useSessionCoordination((state) => state.messages[job.id]);
   const loading = useSessionCoordination((state) => state.loading[job.id]);
@@ -57,6 +58,7 @@ function SessionIdentityDetails({ job }: { job: JobSummary }) {
   }, [open, job.id, job.state, offset, load]);
 
   const send = async () => {
+    const submittedRevision = draftRevision.current;
     setSending(true);
     try {
       const key = JSON.stringify([recipient, content]);
@@ -70,7 +72,7 @@ function SessionIdentityDetails({ job }: { job: JobSummary }) {
       });
       setReceipt(result);
       if (result.status !== "unknown") {
-        setContent("");
+        if (draftRevision.current === submittedRevision) setContent("");
         pendingRequest.current = null;
       }
       await load(job.id, offset);
@@ -134,14 +136,14 @@ function SessionIdentityDetails({ job }: { job: JobSummary }) {
                   <p className="text-muted-foreground">Sent by you with this job as context. Agent-authored notes are labeled separately. Paused and inactive sessions are never resumed.</p>
                   <label className="block">
                     Recipient in this project
-                    <select className="mt-1 w-full rounded border border-input bg-background p-2" value={recipient} onChange={(event) => setRecipient(event.target.value)} required>
+                    <select className="mt-1 w-full rounded border border-input bg-background p-2" value={recipient} onChange={(event) => { draftRevision.current += 1; setRecipient(event.target.value); }} required>
                       <option value="">Choose a running Copilot session</option>
                       {directory.peers?.map((peer) => <option key={peer.id} value={peer.id}>{peer.title || peer.id} ({peer.id})</option>)}
                     </select>
                   </label>
                   <label className="block">
                     Note
-                    <textarea className="mt-1 w-full rounded border border-input bg-background p-2" rows={3} maxLength={10000} value={content} onChange={(event) => setContent(event.target.value)} required />
+                    <textarea className="mt-1 w-full rounded border border-input bg-background p-2" rows={3} maxLength={10000} value={content} onChange={(event) => { draftRevision.current += 1; setContent(event.target.value); }} required />
                   </label>
                   <button type="submit" className={actionClass} disabled={sending || !recipient || !content.trim()}>
                     {sending ? "Sending..." : "Send peer note"}
