@@ -9,16 +9,18 @@ from dishka import Provider, Scope, from_context, make_async_container
 from dishka.integrations.fastapi import setup_dishka
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.api.jobs import router as jobs_router
 from backend.di import CachedModelsBySdk
 
 
 class _ModelsProvider(Provider):
-    """Minimal provider for just CachedModelsBySdk."""
+    """Provide dependencies for ambient model discovery."""
 
     scope = Scope.APP
     models = from_context(provides=CachedModelsBySdk)
+    session_factory = from_context(provides=async_sessionmaker[AsyncSession])
 
 
 async def _make_app(cached_models: list[dict[str, object]]) -> FastAPI:
@@ -27,7 +29,10 @@ async def _make_app(cached_models: list[dict[str, object]]) -> FastAPI:
     app.include_router(jobs_router, prefix="/api")
     container = make_async_container(
         _ModelsProvider(),
-        context={CachedModelsBySdk: CachedModelsBySdk({"copilot": cached_models})},
+        context={
+            CachedModelsBySdk: CachedModelsBySdk({"copilot": cached_models}),
+            async_sessionmaker[AsyncSession]: async_sessionmaker(),
+        },
     )
     setup_dishka(container, app)
     return app

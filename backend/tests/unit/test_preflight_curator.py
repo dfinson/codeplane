@@ -9,17 +9,44 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from backend.config import CPLConfig
+from backend.models.db import Base
 from backend.models.events import EventKind, new_event
+from backend.persistence.job_repo import JobRepository
+from backend.persistence.project_repo import ProjectRepository
 from backend.services.tools import preflight_curator
+from backend.tests.unit.conftest import make_job
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
     from pathlib import Path
 
 
 @pytest.fixture
-async def scout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNamespace:
+async def scout_session_factory(tmp_path: Path) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        repo = str(tmp_path / "checkout")
+        async with factory() as session:
+            await ProjectRepository(session).create("proj-1", "Scout", [repo])
+            await JobRepository(session).create(make_job(id="job-scout", repo=repo))
+            await session.commit()
+        yield factory
+    finally:
+        await engine.dispose()
+
+
+@pytest.fixture
+async def scout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    scout_session_factory: async_sessionmaker[AsyncSession],
+) -> SimpleNamespace:
     """Use startup's constructor without starting external services."""
     import backend.lifespan as lifespan
 
@@ -59,7 +86,7 @@ async def scout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNamesp
         monkeypatch.setattr(lifespan, name, MagicMock(return_value=instance))
 
     kwargs: dict[str, Any] = {
-        "session_factory": MagicMock(),
+        "session_factory": scout_session_factory,
         "event_bus": MagicMock(),
         "config": config,
     }
@@ -212,10 +239,13 @@ async def test_scout_does_not_import_structural_tools(scout: SimpleNamespace, mo
 async def test_scout_timeout_aborts_instead_of_returning_partial_brief(
     scout: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(preflight_curator, "_SESSION_TIMEOUT_S", 0.01)
+    timeout = asyncio.timeout(None)
+    monkeypatch.setattr(preflight_curator.asyncio, "timeout", lambda _: timeout)
 
     async def events(session_id: str):
         yield new_event(session_id, EventKind.message_assistant, {"content": "Unfinished exploration"})
+        # Expire after SDK creation, rather than racing the account lookup.
+        timeout.reschedule(asyncio.get_running_loop().time())
         await asyncio.Event().wait()
 
     scout.adapter.stream_events.side_effect = events
