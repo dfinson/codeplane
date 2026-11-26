@@ -556,6 +556,16 @@ class TestSendMessage:
     async def test_send_to_missing_session(self, adapter: CopilotAdapter) -> None:
         await adapter.send_message("nonexistent", "hello")  # should not raise
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("error_type", [_FakeJsonRpcError, _FakeProcessExitedError, ConnectionError])
+    async def test_ambient_send_failure_retains_existing_logging(self, adapter, error_type):
+        session = _FakeCopilotSession()
+        session.send = AsyncMock(side_effect=error_type("Transport failed"))
+        adapter._sessions["sess-1"] = session
+        with patch("backend.services.copilot_adapter._adapter.log.warning") as warning:
+            await adapter.send_message("sess-1", "Follow-up")
+        warning.assert_called_once_with("copilot_send_message_failed", session_id="sess-1", exc_info=True)
+
 
 # ---------------------------------------------------------------------------
 # Tests: abort_session
@@ -1454,6 +1464,47 @@ class TestTfEventEmission:
 
 
 class TestExplicitInferenceAccount:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("credential_id", ["account-a", None])
+    @pytest.mark.parametrize("error_type", [_FakeJsonRpcError, _FakeProcessExitedError, ConnectionError])
+    async def test_followup_rejection_is_safe_and_not_published(self, adapter, credential_id, error_type):
+        import traceback
+
+        from backend.services.inference_account import InferenceAccountError
+        from backend.services.runtime.service import AgentSession, RuntimeService
+
+        with (
+            patch(
+                "backend.services.inference_account.resolve_inference_token", AsyncMock(return_value="selected-token")
+            ),
+            patch("copilot.CopilotClient", return_value=_FakeCopilotClient()) as factory,
+        ):
+            session_id = await adapter.create_session(_make_config(job_id="job-a", copilot_credential_id=credential_id))
+            sdk_session = adapter._sessions[session_id]
+            sdk_session.send = AsyncMock(side_effect=error_type("Authentication rejected: selected-token"))
+            target = AgentSession()
+            target._adapter = adapter
+            target._session_id = session_id
+            runtime = MagicMock(spec=RuntimeService)
+            runtime._agent_sessions = {"job-a": target}
+            runtime._event_bus = AsyncMock()
+            runtime._step_tracker = None
+            runtime._echo_suppress = {}
+            try:
+                with (
+                    patch("backend.services.copilot_adapter._adapter.log.warning") as warning,
+                    pytest.raises(InferenceAccountError, match="selected Copilot credential") as error,
+                ):
+                    await RuntimeService.send_message(runtime, "job-a", "Follow-up")
+                assert "selected-token" not in "".join(traceback.format_exception(error.value))
+                warning.assert_not_called()
+                runtime._event_bus.publish.assert_not_awaited()
+                assert not runtime._echo_suppress
+                sdk_session.send.assert_awaited_once_with("Follow-up", mode="immediate")
+                factory.assert_called_once_with(github_token="selected-token", use_logged_in_user=False)
+            finally:
+                await adapter.abort_session(session_id)
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("credential_id", ["account-a", None])
     async def test_async_error_payload_is_safe_for_explicit_and_inherited_accounts(self, adapter, credential_id):

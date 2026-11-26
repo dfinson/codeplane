@@ -763,16 +763,17 @@ class CopilotAdapter(BaseAgentAdapter):
         finally:
             await self._cleanup_session(session_id)
 
-    async def _validate_session_account(self, session_id: str) -> None:
+    async def _validate_session_account(self, session_id: str) -> bool:
         from backend.services.inference_account import inference_scope, resolve_inference_token
 
         # A peer caller's task-local account must not replace the recipient's binding.
         with inference_scope():
-            await resolve_inference_token(
+            token = await resolve_inference_token(
                 self._session_factory,
                 job_id=self._session_to_job.get(session_id),
                 credential_id=self._session_credentials.get(session_id),
             )
+        return bool(token)
 
     async def send_message(self, session_id: str, message: str) -> None:
         from copilot._jsonrpc import JsonRpcError, ProcessExitedError
@@ -781,10 +782,14 @@ class CopilotAdapter(BaseAgentAdapter):
         if session is None:
             log.warning("copilot_send_no_session", session_id=session_id)
             return
-        await self._validate_session_account(session_id)
+        explicit_account = await self._validate_session_account(session_id)
         try:
             await session.send(message, mode="immediate")
         except (JsonRpcError, ProcessExitedError, ConnectionError):
+            if explicit_account:
+                from backend.services.inference_account import InferenceAccountError
+
+                raise InferenceAccountError("Message failed for the selected Copilot credential") from None
             log.warning("copilot_send_message_failed", session_id=session_id, exc_info=True)
 
     async def send_peer_message(
