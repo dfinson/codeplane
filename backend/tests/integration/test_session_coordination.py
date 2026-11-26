@@ -15,6 +15,7 @@ from backend.services.copilot_adapter._adapter import CopilotAdapter
 from backend.services.events.event_bus import EventBus
 from backend.services.job.approval_service import ApprovalService
 from backend.services.runtime.attempt_bindings import AttemptBindings
+from backend.services.runtime.execution_control import ExecutionControl
 from backend.services.runtime.service import AgentSession, RuntimeService
 from backend.services.session_coordination import SessionCoordination
 
@@ -40,6 +41,7 @@ def runtime_with(target):
     runtime._waiting_for_approval = set()
     runtime._attempt_bindings = AttemptBindings("test")
     runtime._recipe_controllers = {}
+    runtime._execution_control = ExecutionControl()
 
     async def deliver(job_id, session, text, **kwargs):
         await RuntimeService.deliver_peer_note(runtime, job_id, session, text, **kwargs)

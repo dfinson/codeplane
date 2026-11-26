@@ -170,10 +170,12 @@ class AgentSession:
         if self._adapter and self._session_id:
             await self._adapter.abort_session(self._session_id)
 
-    async def send_peer_message(self, message: str, *, can_send: Callable[[], Awaitable[bool]] | None = None) -> None:
+    async def send_peer_message(
+        self, message: str, *, admission: Callable[[], contextlib.AbstractAsyncContextManager[None]] | None = None
+    ) -> None:
         if self.tools_paused or self._adapter is None or self._session_id is None:
             raise StateConflictError("Recipient is paused or has no live SDK session")
-        await self._adapter.send_peer_message(self._session_id, message, can_send=can_send)
+        await self._adapter.send_peer_message(self._session_id, message, admission=admission)
 
 
 class EventAction(enum.Enum):
@@ -224,6 +226,8 @@ if TYPE_CHECKING:
     from backend.services.sidecar.session import SidecarSessionManager
 
 log = structlog.get_logger()
+
+_PEER_SEND_TIMEOUT_SECONDS = 30.0
 
 _SERVER_RESTART_RECOVERY_INSTRUCTION = (
     "The CodePlane server restarted while this job was in progress. "
@@ -3240,6 +3244,20 @@ class RuntimeService:
                     or run.cancel_requested_at is not None
                 ):
                     return False
+        else:
+            from backend.persistence.approval_repo import ApprovalRepository
+
+            async with self._session_factory() as session:
+                job = await JobRepository(session).get(job_id)
+                if (
+                    job is None
+                    or job.source != "managed"
+                    or job.observation_only
+                    or job.state != JobState.running
+                    or self._shutting_down
+                    or await ApprovalRepository(session).has_blocking_approvals(job_id)
+                ):
+                    return False
         return self.peer_execution_is_current(job_id, target)
 
     async def deliver_peer_note(
@@ -3249,6 +3267,7 @@ class RuntimeService:
         message: str,
         *,
         can_send: Callable[[], Awaitable[bool]] | None = None,
+        sender_job_id: str | None = None,
     ) -> None:
         async def eligible() -> bool:
             allowed = can_send is None or await can_send()
@@ -3256,8 +3275,21 @@ class RuntimeService:
 
         if not await eligible():
             raise StateConflictError("Recipient execution changed before dispatch")
-        self._echo_suppress.setdefault(job_id, set()).add(message)
-        await target.send_peer_message(message, can_send=eligible)
+
+        @contextlib.asynccontextmanager
+        async def admission() -> AsyncIterator[None]:
+            job_ids = {job_id}
+            if sender_job_id is not None:
+                job_ids.add(sender_job_id)
+            async with contextlib.AsyncExitStack() as stack:
+                for current_job_id in sorted(job_ids):
+                    await stack.enter_async_context(self._execution_control.hold(current_job_id))
+                if not await eligible():
+                    raise StateConflictError("Peer execution changed or is no longer eligible for dispatch")
+                yield
+
+        async with asyncio.timeout(_PEER_SEND_TIMEOUT_SECONDS):
+            await target.send_peer_message(message, admission=admission)
 
     async def publish_peer_note(self, event: SessionEvent) -> None:
         await self._event_bus.publish(event)

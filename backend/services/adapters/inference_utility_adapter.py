@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from backend.services.adapters.agent_adapter import AgentAdapterInterface, CompletionResult
-from backend.services.inference_account import resolve_inference_token
+from backend.services.adapters.agent_adapter import AgentAdapterInterface, CompletionResult, UtilityCompletionError
+from backend.services.inference_account import InferenceAccountError, resolve_inference_token
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -71,7 +71,10 @@ class InferenceUtilityAdapter(AgentAdapterInterface):
     ) -> CompletionResult:
         from backend.services.adapters.completion_context import current_completion_context
 
-        token = await resolve_inference_token(self._session_factory, job_id=current_completion_context().job_id)
+        try:
+            token = await resolve_inference_token(self._session_factory, job_id=current_completion_context().job_id)
+        except InferenceAccountError as exc:
+            raise UtilityCompletionError(str(exc), reason="inference_account_unavailable") from None
         provider = self._registry.get_completion_provider("copilot" if token else self._utility_sdk)
         return await provider.complete(
             prompt, model=model, system_message=system_message, excluded_tools=excluded_tools

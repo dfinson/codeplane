@@ -1,5 +1,7 @@
 """Durable peer delivery receipts. Unknown attempts are never replayed."""
 
+from datetime import UTC
+
 from sqlalchemy import or_, select, update
 
 from backend.models.api_schemas import PeerMessageResponse
@@ -8,7 +10,10 @@ from backend.persistence.repository import BaseRepository
 
 
 def _response(row: PeerMessageRow) -> PeerMessageResponse:
-    return PeerMessageResponse.model_validate(row, from_attributes=True)
+    response = PeerMessageResponse.model_validate(row, from_attributes=True)
+    if response.created_at.tzinfo is None:
+        response.created_at = response.created_at.replace(tzinfo=UTC)
+    return response
 
 
 class PeerMessageRepository(BaseRepository):

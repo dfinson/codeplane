@@ -28,6 +28,58 @@ def test_create_copilot_client_uses_plain_constructor(monkeypatch) -> None:
     assert client.config is None
 
 
+def test_real_sdk_teardown_sanitizes_explicit_diagnostics_without_hiding_concurrent_ambient_errors():
+    script = textwrap.dedent("""
+        import asyncio
+        import io
+        import logging
+        import sys
+        import structlog
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, Mock
+        from copilot import CopilotClient, RuntimeConnection
+        from backend.services.copilot_adapter._client import stop_copilot_client
+
+        def offline(event, arguments):
+            if event in {"socket.connect", "socket.getaddrinfo", "subprocess.Popen"}:
+                raise AssertionError("Teardown validation must not start a CLI or use the network")
+
+        async def main():
+            output = io.StringIO()
+            logging.basicConfig(level=logging.DEBUG, stream=output, force=True)
+            structlog.configure(processors=[
+                structlog.processors.format_exc_info,
+                structlog.processors.JSONRenderer(),
+            ])
+            async def stop(explicit):
+                marker = "explicit-fake-token-sentinel" if explicit else "ambient-error-sentinel"
+                client = CopilotClient(connection=RuntimeConnection.for_stdio(path=sys.executable))
+                session = SimpleNamespace(
+                    session_id="offline",
+                    disconnect=AsyncMock(side_effect=RuntimeError(marker)),
+                    _mark_disconnected=Mock(),
+                )
+                client._sessions["offline"] = session
+                await stop_copilot_client(client, timeout=1, explicit_account=explicit)
+                session.disconnect.assert_awaited_once()
+                session._mark_disconnected.assert_called_once()
+            await asyncio.gather(stop(True), stop(False))
+            text = output.getvalue()
+            assert "explicit-fake-token-sentinel" not in text, text
+            assert "diagnostic withheld for explicit inference account" in text, text
+            assert "ambient-error-sentinel" in text, text
+            logging.getLogger("copilot.client").debug("after-teardown-sentinel")
+            assert "after-teardown-sentinel" in output.getvalue()
+
+        with asyncio.Runner() as runner:
+            runner.get_loop()
+            sys.addaudithook(offline)
+            runner.run(main())
+    """)
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_structured_completion_uses_the_real_sdk_catalog_cache_without_a_second_rpc():
     script = textwrap.dedent("""
         import asyncio

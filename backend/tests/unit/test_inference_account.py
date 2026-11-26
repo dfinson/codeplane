@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import aclosing
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -197,6 +198,77 @@ async def test_utility_honors_completion_job_scope_and_independent_ambient_provi
     copilot.complete.assert_awaited_once()
     claude.complete.assert_awaited_once()
     registry.get_adapter.assert_not_called()
+
+
+async def test_production_assessment_and_monitor_use_bound_account_and_recheck_deletion(
+    accounts, tmp_path, monkeypatch
+):
+    from backend.models.execution_contracts import ExecutionContractPin
+    from backend.services.action_policy.classifier import Action, ActionKind, RepoPolicy
+    from backend.services.action_policy.monitor import MonitorSession, MonitorVerdict
+    from backend.services.action_policy.production import StandaloneGovernance
+    from backend.services.adapters.agent_adapter import CompletionResult, UtilityCompletionError
+    from backend.services.adapters.completion_context import (
+        CompletionContext,
+        completion_context,
+        current_completion_context,
+    )
+    from backend.services.events.event_bus import EventBus
+    from backend.tests.unit.test_execution_contracts import _contract
+
+    contexts = []
+
+    async def complete(*args, **kwargs):
+        contexts.append(current_completion_context())
+        return CompletionResult(text="approve", model="test-model")
+
+    copilot = SimpleNamespace(complete=AsyncMock(side_effect=complete))
+    claude = SimpleNamespace(complete=AsyncMock())
+    registry = MagicMock()
+    registry.get_completion_provider.side_effect = lambda sdk: copilot if sdk == "copilot" else claude
+    config = CPLConfig()
+    config.runtime.utility_sdk = "claude"
+    config.runtime.copilot_only = False
+    async with accounts() as session:
+        job = await JobRepository(session).get("job-a")
+    host = SimpleNamespace(
+        _session_factory=accounts,
+        _adapter_registry=registry,
+        _config=config,
+        _event_bus=EventBus(),
+        _execution_contracts=MagicMock(),
+        _approval_service=MagicMock(),
+        _git_service=MagicMock(),
+        _policy_batchers={},
+        _get_job=AsyncMock(return_value=job),
+        execution_epoch="epoch",
+    )
+    governance = StandaloneGovernance(host, tmp_path)
+    pin = ExecutionContractPin(job_id="job-a", admission_id="run", budget_id="job-a", contract=_contract("test"))
+    router = governance.for_job(pin, RepoPolicy())
+    # Exercise the production monitor's LLM branch without filesystem heuristics.
+    monkeypatch.setattr(MonitorSession, "evaluate", MonitorSession._llm_evaluate)
+    action = Action(kind=ActionKind.shell, command="example", workspace_path=str(tmp_path))
+    classification = SimpleNamespace(reason="Requires assessment")
+    context = CompletionContext(role="assessment", job_id="job-a", execution_contract=pin)
+    try:
+        with completion_context(context):
+            await router._authority._provider.complete("assessment")
+        assert contexts[0] is context
+        assert (await router._monitor(action, classification))[0] == MonitorVerdict.approve
+        assert copilot.complete.await_count == 2
+        async with accounts() as session:
+            await CredentialRepository(session).delete("a")
+            await session.commit()
+        with completion_context(context), pytest.raises(UtilityCompletionError, match="missing"):
+            await router._authority._provider.complete("assessment after deletion")
+        assert (await router._monitor(action, classification))[0] == MonitorVerdict.escalate
+        assert copilot.complete.await_count == 2
+        claude.complete.assert_not_awaited()
+        registry.get_adapter.assert_not_called()
+    finally:
+        await governance._ledger.close()
+        await governance._assessments.shutdown()
 
 
 @pytest.mark.parametrize("ending", ["complete", "error", "close"])

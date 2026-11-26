@@ -124,6 +124,7 @@ class SessionCoordination:
                     and target.sdk == "copilot"
                     and target.state == JobState.running
                     and execution is not None
+                    and await self._runtime.peer_execution_is_eligible(target.id, execution)
                 )
                 cards.append(
                     SessionAgentCard(
@@ -280,7 +281,9 @@ class SessionCoordination:
                         return False
                     return sender_is_current() and self._runtime.peer_execution_is_current(recipient.id, target)
 
-                await self._runtime.deliver_peer_note(recipient.id, target, envelope, can_send=can_dispatch)
+                await self._runtime.deliver_peer_note(
+                    recipient.id, target, envelope, can_send=can_dispatch, sender_job_id=sender.id
+                )
             except StateConflictError as exc:
                 receipt.status = "rejected"
                 receipt.detail = str(exc)

@@ -276,7 +276,7 @@ class TestJobsCrud:
         assert (await client.get("/api/models", params={"sdk": "copilot"})).json()["items"] == ambient
         assert (
             await client.post("/api/jobs", json=_create_body(sdk="claude", copilotCredentialId=account_id))
-        ).status_code == 409
+        ).status_code == 400
 
     # ── Create ──
 

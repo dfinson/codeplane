@@ -30,7 +30,7 @@ from backend.services.copilot_adapter._client import create_copilot_client, stop
 from backend.services.copilot_adapter._schema import prepare_response_schema
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable
+    from collections.abc import AsyncIterator, Callable
 
     from copilot import CopilotClient
     from copilot.generated.session_events import (
@@ -129,6 +129,8 @@ class CopilotAdapter(BaseAgentAdapter):
         )
         self._sessions: dict[str, CopilotSession] = {}
         self._session_credentials: dict[str, str | None] = {}
+        self._explicit_account_sessions: set[str] = set()
+        self._peer_echo_suppress: dict[str, set[str]] = {}
         self._callback_tasks: dict[str, set[asyncio.Task[None]]] = {}
         self._stop_tasks: dict[str, asyncio.Task[None]] = {}
         self._opening_tasks: set[asyncio.Task[Any]] = set()
@@ -145,6 +147,7 @@ class CopilotAdapter(BaseAgentAdapter):
         existing = self._stop_tasks.get(session_id)
         if existing is not None:
             return existing
+        explicit_account = session_id in self._explicit_account_sessions
         self.pause_tools(session_id)
         self._accepting_events.discard(session_id)
         unsubscribe = self._unsubscribe.pop(session_id, None)
@@ -152,7 +155,7 @@ class CopilotAdapter(BaseAgentAdapter):
             try:
                 unsubscribe()
             except Exception:
-                log.warning("copilot_unsubscribe_failed", session_id=session_id, exc_info=True)
+                log.warning("copilot_unsubscribe_failed", session_id=session_id, exc_info=not explicit_account)
         for task in self._callback_tasks.get(session_id, ()):
             task.cancel()
         queue = self._queues.get(session_id)
@@ -160,18 +163,22 @@ class CopilotAdapter(BaseAgentAdapter):
             queue.put_nowait(None)
         task = asyncio.create_task(self._close_session(session_id), name=f"copilot-stop-{session_id[:8]}")
         self._stop_tasks[session_id] = task
-        task.add_done_callback(lambda completed: self._forget_stop(session_id, completed))
+        task.add_done_callback(
+            lambda completed: self._forget_stop(session_id, completed, explicit_account=explicit_account)
+        )
         return task
 
     async def _close_session(self, session_id: str) -> None:
         client = self._clients.get(session_id)
         if client is not None:
-            await self._stop_client(client)
+            await self._stop_client(client, explicit_account=session_id in self._explicit_account_sessions)
         callbacks = tuple(self._callback_tasks.get(session_id, ()))
         if callbacks:
             await asyncio.gather(*callbacks, return_exceptions=True)
         self._sessions.pop(session_id, None)
         self._session_credentials.pop(session_id, None)
+        self._explicit_account_sessions.discard(session_id)
+        self._peer_echo_suppress.pop(session_id, None)
         job_id = self._session_to_job.get(session_id)
         last_for_job = not any(sid != session_id and jid == job_id for sid, jid in self._session_to_job.items())
         if job_id and last_for_job:
@@ -182,11 +189,15 @@ class CopilotAdapter(BaseAgentAdapter):
             self._session_to_job.pop(session_id, None)
         super()._cleanup_session_state(session_id)
 
-    def _forget_stop(self, session_id: str, task: asyncio.Task[None]) -> None:
+    def _forget_stop(self, session_id: str, task: asyncio.Task[None], *, explicit_account: bool = False) -> None:
         if self._stop_tasks.get(session_id) is task:
             self._stop_tasks.pop(session_id, None)
         if not task.cancelled() and task.exception() is not None:
-            log.error("copilot_stop_task_failed", session_id=session_id, error=str(task.exception()))
+            log.error(
+                "copilot_stop_task_failed",
+                session_id=session_id,
+                error="Selected Copilot account cleanup failed" if explicit_account else str(task.exception()),
+            )
 
     async def _cleanup_session(self, session_id: str) -> None:
         """Retain ownership until SDK closure and callback draining both finish."""
@@ -224,9 +235,9 @@ class CopilotAdapter(BaseAgentAdapter):
         self._write_tasks.clear()
 
     @staticmethod
-    async def _stop_client(client: CopilotClient) -> None:
+    async def _stop_client(client: CopilotClient, *, explicit_account: bool = False) -> None:
         """Stop a CopilotClient, terminating its CLI server process."""
-        await stop_copilot_client(client, timeout=CLIENT_STOP_TIMEOUT_S)
+        await stop_copilot_client(client, timeout=CLIENT_STOP_TIMEOUT_S, explicit_account=explicit_account)
 
     async def _maybe_broadcast_telemetry(self, job_id: str, *, totals: dict[str, float | int] | None = None) -> None:
         if not any(jid == job_id and sid in self._accepting_events for sid, jid in self._session_to_job.items()):
@@ -420,6 +431,12 @@ class CopilotAdapter(BaseAgentAdapter):
         elif kind_str == "user.message":
             um = cast("UserMessageData", data) if data else None
             content = (um.content or "") if um else ""
+            peer_echoes = self._peer_echo_suppress.get(session_id)
+            if peer_echoes is not None and content in peer_echoes:
+                peer_echoes.remove(content)
+                if not peer_echoes:
+                    self._peer_echo_suppress.pop(session_id, None)
+                return
             if "<system_notification>" in content:
                 return
             if content.strip():
@@ -731,6 +748,8 @@ class CopilotAdapter(BaseAgentAdapter):
             raise
         lease_id = str(uuid.uuid4())
         self._clients[lease_id] = client
+        if token:
+            self._explicit_account_sessions.add(lease_id)
         owner = asyncio.current_task()
         if owner is not None:
             self._opening_tasks.add(owner)
@@ -935,6 +954,9 @@ class CopilotAdapter(BaseAgentAdapter):
         self._session_credentials[session_id] = config.copilot_credential_id
         self._clients[session_id] = client
         self._clients.pop(lease_id, None)
+        if token:
+            self._explicit_account_sessions.add(session_id)
+        self._explicit_account_sessions.discard(lease_id)
         self._accepting_events.add(session_id)
 
         # Wire telemetry mapping before registering the callback so
@@ -1050,21 +1072,34 @@ class CopilotAdapter(BaseAgentAdapter):
             raise NativeDeliveryError("Managed Copilot delivery is unknown", uncertain=True) from exc
 
     async def send_peer_message(
-        self, session_id: str, message: str, *, can_send: Callable[[], Awaitable[bool]] | None = None
+        self,
+        session_id: str,
+        message: str,
+        *,
+        admission: Callable[[], contextlib.AbstractAsyncContextManager[None]] | None = None,
     ) -> None:
+        from copilot._jsonrpc import JsonRpcError
+
         session = self._sessions.get(session_id)
         if session is None:
             raise StateConflictError("The target SDK session is no longer active")
         await self._validate_session_account(session_id)
-        if can_send is not None and not await can_send():
-            raise StateConflictError("Peer execution changed or is no longer eligible for dispatch")
-        if (
-            self._sessions.get(session_id) is not session
-            or session_id in self._paused_sessions
-            or session_id in self._stop_tasks
-        ):
-            raise StateConflictError("The target SDK session is no longer active or is paused")
-        await session.send(message, mode="enqueue")
+        async with admission() if admission is not None else contextlib.nullcontext():
+            if (
+                self._sessions.get(session_id) is not session
+                or session_id in self._paused_sessions
+                or session_id in self._stop_tasks
+            ):
+                raise StateConflictError("The target SDK session is no longer active or is paused")
+            peer_echoes = self._peer_echo_suppress.setdefault(session_id, set())
+            peer_echoes.add(message)
+            try:
+                await session.send(message, mode="enqueue")
+            except JsonRpcError:
+                peer_echoes.discard(message)
+                if not peer_echoes:
+                    self._peer_echo_suppress.pop(session_id, None)
+                raise StateConflictError("The target SDK session rejected the peer note") from None
 
     async def interrupt_session(self, session_id: str) -> None:
         from copilot._jsonrpc import JsonRpcError, ProcessExitedError
@@ -1076,7 +1111,11 @@ class CopilotAdapter(BaseAgentAdapter):
             await session.abort()
             log.info("copilot_session_interrupted", session_id=session_id)
         except (JsonRpcError, ProcessExitedError):
-            log.warning("copilot_interrupt_failed", session_id=session_id, exc_info=True)
+            log.warning(
+                "copilot_interrupt_failed",
+                session_id=session_id,
+                exc_info=session_id not in self._explicit_account_sessions,
+            )
 
     async def abort_session(self, session_id: str) -> None:
         from copilot._jsonrpc import JsonRpcError, ProcessExitedError
@@ -1086,7 +1125,11 @@ class CopilotAdapter(BaseAgentAdapter):
             if session is not None:
                 await asyncio.wait_for(session.abort(), timeout=CLIENT_STOP_TIMEOUT_S)
         except (TimeoutError, JsonRpcError, ProcessExitedError):
-            log.warning("copilot_abort_failed", session_id=session_id, exc_info=True)
+            log.warning(
+                "copilot_abort_failed",
+                session_id=session_id,
+                exc_info=session_id not in self._explicit_account_sessions,
+            )
         finally:
             await self._finish_session(session_id)
 
@@ -1120,6 +1163,8 @@ class CopilotAdapter(BaseAgentAdapter):
         queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue()
         self._queues[tmp_session_id] = queue
         self._clients[tmp_session_id] = client
+        if token:
+            self._explicit_account_sessions.add(tmp_session_id)
         owner = asyncio.current_task()
         if owner is not None:
             self._opening_tasks.add(owner)

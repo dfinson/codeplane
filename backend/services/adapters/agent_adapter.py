@@ -9,7 +9,8 @@ from typing import TYPE_CHECKING, Literal
 from backend.models.domain import AgentSDK, SDKModelMismatchError
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable
+    from collections.abc import AsyncIterator, Callable
+    from contextlib import AbstractAsyncContextManager
 
     from backend.models.api_schemas import ExecutionPhase
     from backend.models.domain import SessionConfig
@@ -136,7 +137,11 @@ class AgentAdapterInterface(ABC):
         """Send a follow-up message into a running session."""
 
     async def send_peer_message(
-        self, session_id: str, message: str, *, can_send: Callable[[], Awaitable[bool]] | None = None
+        self,
+        session_id: str,
+        message: str,
+        *,
+        admission: Callable[[], AbstractAsyncContextManager[None]] | None = None,
     ) -> None:
         """Queue a peer note, checking runtime eligibility immediately before enqueue."""
         raise NotImplementedError("This adapter does not support peer delivery")

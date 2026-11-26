@@ -1099,6 +1099,29 @@ class TestOnEventCallback:
         assert len(transcripts) == 1
         assert transcripts[0].kind == EventKind.message_user
 
+    async def test_peer_echo_is_suppressed_before_recipe_consumption_and_scoped_to_native_session(self, adapter):
+        target_id, target_queue, target = await self._setup_session(adapter, _make_config(job_id="recipe-job"))
+        sibling_id, sibling_queue, sibling = await self._setup_session(adapter, _make_config(job_id="recipe-job"))
+        envelope = '{"messageId":"peer-note","content":"peer context"}'
+        await adapter.send_peer_message(target_id, envelope)
+        await self._fire(sibling, _FakeSdkSessionEvent("user.message", _FakeEventData(content=envelope)))
+        await self._fire(target, _FakeSdkSessionEvent("user.message", _FakeEventData(content=envelope)))
+        assert not [event for event in self._drain_queue(target_queue) if event.kind == EventKind.message_user]
+        sibling_messages = [event for event in self._drain_queue(sibling_queue) if event.kind == EventKind.message_user]
+        assert len(sibling_messages) == 1
+        assert sibling_messages[0].payload["content"] == envelope
+        assert target_id not in adapter._peer_echo_suppress
+
+        await self._fire(target, _FakeSdkSessionEvent("user.message", _FakeEventData(content="Operator follow-up")))
+        assert [event.payload["content"] for event in self._drain_queue(target_queue)] == ["Operator follow-up"]
+        target.send = AsyncMock(side_effect=TimeoutError("delivery uncertain"))
+        with pytest.raises(TimeoutError):
+            await adapter.send_peer_message(target_id, "uncertain peer context")
+        assert adapter._peer_echo_suppress[target_id] == {"uncertain peer context"}
+        await adapter.abort_session(target_id)
+        await adapter.abort_session(sibling_id)
+        assert not adapter._peer_echo_suppress
+
     @pytest.mark.asyncio
     async def test_system_notification_user_message_skipped(self, adapter: CopilotAdapter) -> None:
         sid, queue, session = await self._setup_session(adapter)
@@ -1805,6 +1828,47 @@ class TestTfEventEmission:
 
 
 class TestExplicitInferenceAccount:
+    @pytest.mark.parametrize("phase", ["session", "startup", "completion"])
+    @pytest.mark.parametrize("credential_id", ["account-a", None])
+    async def test_teardown_failures_do_not_expose_explicit_or_inherited_credentials(
+        self, adapter, phase, credential_id
+    ):
+        import traceback
+
+        client = _FakeCopilotClient()
+        client.stop = AsyncMock(side_effect=OSError("secret-teardown-sentinel"))
+        client.force_stop = AsyncMock(side_effect=OSError("secret-teardown-sentinel"))
+        if phase != "session":
+            client.create_session = AsyncMock(side_effect=RuntimeError("secret-teardown-sentinel"))
+        with (
+            patch(
+                "backend.services.inference_account.resolve_inference_token",
+                AsyncMock(return_value="secret-teardown-sentinel"),
+            ),
+            patch("copilot.CopilotClient", return_value=client),
+            patch("backend.services.copilot_adapter._client.log") as client_log,
+            patch("backend.services.copilot_adapter._adapter.log") as adapter_log,
+        ):
+            try:
+                with pytest.raises(Exception) as failure:
+                    if phase == "completion":
+                        await adapter.complete("helper")
+                    else:
+                        session_id = await adapter.create_session(
+                            _make_config(job_id="job-a", copilot_credential_id=credential_id)
+                        )
+                        await adapter.abort_session(session_id)
+                assert "secret-teardown-sentinel" not in "".join(traceback.format_exception(failure.value))
+                assert client.force_stop.await_count > 0
+                calls = client_log.mock_calls + adapter_log.mock_calls
+                assert "secret-teardown-sentinel" not in str(calls)
+                assert all(not call.kwargs.get("exc_info") for call in calls)
+                assert any(call.args[0] == "copilot_stop_task_failed" for call in adapter_log.error.call_args_list)
+            finally:
+                client.stop = AsyncMock()
+                await adapter.shutdown()
+            assert not adapter._explicit_account_sessions
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("credential_id", ["account-a", None])
     @pytest.mark.parametrize("error_type", [_FakeJsonRpcError, _FakeProcessExitedError, ConnectionError])

@@ -367,7 +367,7 @@ class TestCreateTrackerLink:
         )
 
         assert response.status_code == 422
-        assert response.json()["detail"] == "Unsupported tracker provider: copilot"
+        assert response.json()["detail"] == "Credential is not a tracker credential"
         assert (await client.get("/api/projects/proj-1/tracker-links")).json() == {"trackerLinks": []}
         adapter.test_connection.assert_not_awaited()
 
